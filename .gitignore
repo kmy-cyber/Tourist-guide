@@ -1,0 +1,66 @@
+# Ignorar archivos dentro de data independientemente de extensión
+data/**
+
+### Python ###
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.python-version
+
+### Entornos virtuales ###
+venv/
+.env/
+.venv/
+env/
+venv*/
+env*/
+.venv*/
+
+### Paquetes e instalación ###
+*.egg-info/
+*.egg
+dist/
+build/
+pip-wheel-metadata/
+
+### Archivos sensibles ###
+.env
+.secrets
+*.key
+*.pem
+config.py
+credentials.json
+
+### IDE y editores ###
+.idea/
+.vscode/
+*.swp
+*.swo
+*.code-workspace
+
+### Datos y modelos grandes ###
+*.csv
+*.parquet
+*.feather
+*.h5
+*.pkl
+*.pth
+*.bin
+*.index
+*.faiss
+*.joblib
+
+### Logs y temporales ###
+*.log
+logs/
+*.tmp
+*.bak
+*~
+
+### Sistema ###
+.DS_Store
+Thumbs.db
+
+### Streamlit (si usas) ###
+.streamlit/
