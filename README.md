@@ -1,4 +1,4 @@
-# Guía Turístico Virtual - Fase 2
+# Guía Turístico Virtual
 
 Sistema multiagente que actúa como guía turístico virtual para Cuba, especializado en museos y excursiones.
 
