@@ -8,27 +8,41 @@ import pickle
 import math
 
 class VectorStore:
+    """Vector store for tourism domain data with specialized handling for museums and excursions"""
+    
     def __init__(self, persist_dir: str):
         self.persist_dir = persist_dir
         
-        # Define directories for each collection type
-        self.collection_dirs = {
-            'museums': os.path.join(persist_dir, 'museums'),
-            'excursions': os.path.join(persist_dir, 'excursions'),
-            'destinations': os.path.join(persist_dir, 'destinations')
+        # Define directories for each collection type and their domain focus
+        self.domain_config = {
+            'museums': {
+                'dir': os.path.join(persist_dir, 'museums'),
+                'categories': ['art', 'history', 'science', 'culture'],
+                'weight': 1.2  # Boost museum matches in searches
+            },
+            'excursions': {
+                'dir': os.path.join(persist_dir, 'excursions'),
+                'categories': ['urban', 'nature', 'cultural'],
+                'weight': 1.1  # Slight boost for excursions
+            },
+            'destinations': {
+                'dir': os.path.join(persist_dir, 'destinations'),
+                'categories': ['urban', 'nature', 'cultural'],
+                'weight': 1.0  # Base weight
+            }
         }
         
         # Ensure collection directories exist
-        for col_dir in self.collection_dirs.values():
-            os.makedirs(col_dir, exist_ok=True)
+        for config in self.domain_config.values():
+            os.makedirs(config['dir'], exist_ok=True)
             
-        # Initialize TF-IDF vectorizer
+        # Initialize TF-IDF vectorizer with domain-specific configuration
         self.vectorizer = TfidfVectorizer(
-            max_features=512,  # Limit features to control vector size
-            stop_words='english',  # Remove common English stop words
-            ngram_range=(1, 2),  # Use unigrams and bigrams
-            min_df=2,  # Minimum document frequency
-            max_df=0.95  # Maximum document frequency
+            max_features=512,
+            stop_words='english',
+            ngram_range=(1, 2),
+            min_df=2,
+            max_df=0.95
         )
         
         # Load or create vectorizer state
@@ -37,19 +51,15 @@ class VectorStore:
             with open(self.vectorizer_path, 'rb') as f:
                 self.vectorizer = pickle.load(f)
         else:
-            print("Vectorizer not found, it will be fitted on the first `add_items` call.")
+            print("Vectorizer will be fitted on first `add_items` call")
 
     def _encode_text(self, text: str) -> List[float]:
-        """Convert text to TF-IDF vector"""
-        # If the vectorizer has not been fitted, it won't have a vocabulary.
-        # This check is crucial for handling the first time a text is encoded
-        # before any items have been added to the store.
+        """Convert text to TF-IDF vector with domain-specific preprocessing"""
+        # Clean and normalize text
+        text = self._preprocess_text(text)
+        
+        # Handle vectorizer initialization
         if not hasattr(self.vectorizer, 'vocabulary_') or not self.vectorizer.vocabulary_:
-            # Fit a dummy text if vocabulary is empty to prevent errors during transformation.
-            # In a real scenario, you'd likely want the vectorizer to be fitted on a corpus
-            # before querying or ensuring all data is added before initial search.
-            # For this context, we will rely on `add_items` to fit it.
-            # If `_encode_text` is called before `add_items`, it will train on the single text.
             self.vectorizer.fit([text])
             with open(self.vectorizer_path, 'wb') as f:
                 pickle.dump(self.vectorizer, f)
@@ -58,39 +68,76 @@ class VectorStore:
         vector = self.vectorizer.transform([text])
         return vector.toarray()[0].tolist()
 
+    def _preprocess_text(self, text: str) -> str:
+        """Preprocess text with domain-specific cleaning and normalization"""
+        if not text:
+            return ""
+            
+        # Basic cleaning
+        text = text.lower().strip()
+        
+        # Normalize domain-specific terms
+        replacements = {
+            'museo': 'museum',
+            'galería': 'gallery',
+            'exposición': 'exhibition',
+            'excursión': 'excursion',
+            'visita guiada': 'guided tour',
+            'recorrido': 'tour'
+        }
+        
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+            
+        return text
+
     def _prepare_document(self, item: Dict) -> Dict:
-        """Prepare a document for indexing"""
+        """Prepare a document for indexing with enhanced metadata"""
         # Combine relevant fields for embedding
         text_for_embedding = f"{item['name']} "
         
-        # Add type-specific fields to the embedding text
+        # Add type-specific fields
         if item['type'] == 'museum':
-            collections = ', '.join(item.get('collections', []))
-            services = ', '.join(item.get('services', []))
-            text_for_embedding += f"{item['description']} {collections} {services}"
+            text_for_embedding += self._prepare_museum_text(item)
         elif item['type'] == 'excursion':
-            included = ', '.join(item.get('included_services', []))
-            text_for_embedding += f"{item['description']} {item.get('difficulty_level', '')} {included}"
+            text_for_embedding += self._prepare_excursion_text(item)
         else:  # destination
-            activities = ', '.join(item.get('activities', []))
-            text_for_embedding += f"{item['description']} {activities}"
+            text_for_embedding += self._prepare_destination_text(item)
         
+        # Create enhanced document
         return {
             'id': item['id'],
             'embedding': self._encode_text(text_for_embedding),
             'metadata': {
                 'name': item['name'],
                 'type': item['type'],
-                'location': item.get('location', ''),
+                'domain_category': item.get('domain_category', []),
+                'location': item.get('location', {}),
                 'url': item.get('url', ''),
                 'image_url': item.get('image_url', ''),
                 'source': item.get('source', ''),
+                'source_info': item.get('source_info', {}),
                 'last_updated': item.get('last_updated'),
-                # Add structured data based on type
                 **self._get_type_specific_metadata(item)
             },
             'document': item['description']
         }
+    
+    def _prepare_museum_text(self, item: Dict) -> str:
+        """Prepare museum-specific text for embedding"""
+        collections = ', '.join(item.get('collections', []))
+        services = ', '.join(item.get('services', []))
+        return f"{item['description']} Collections: {collections} Services: {services}"
+    
+    def _prepare_excursion_text(self, item: Dict) -> str:
+        """Prepare excursion-specific text for embedding"""
+        included = ', '.join(item.get('included_services', []))
+        return f"{item['description']} Level: {item.get('difficulty_level', '')} Services: {included}"
+    
+    def _prepare_destination_text(self, item: Dict) -> str:
+        """Prepare destination-specific text for embedding"""
+        activities = ', '.join(item.get('activities', []))
+        return f"{item['description']} Activities: {activities}"
     
     def _get_type_specific_metadata(self, item: Dict) -> Dict:
         """Extract type-specific metadata"""
@@ -121,7 +168,7 @@ class VectorStore:
 
     def _save_item(self, collection_name: str, doc: Dict):
         """Save a single document to its respective collection directory."""
-        collection_path = self.collection_dirs[collection_name]
+        collection_path = self.domain_config[collection_name]['dir']
         file_path = os.path.join(collection_path, f"{doc['id']}.json")
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(doc, f, ensure_ascii=False, indent=4)
@@ -129,7 +176,7 @@ class VectorStore:
 
     def _load_items(self, collection_name: str) -> List[Dict]:
         """Load all documents from a given collection directory."""
-        collection_path = self.collection_dirs[collection_name]
+        collection_path = self.domain_config[collection_name]['dir']
         loaded_docs = []
         if not os.path.exists(collection_path):
             return []
@@ -171,7 +218,7 @@ class VectorStore:
         for item in items:
             doc = self._prepare_document(item)
             collection_key = f"{item['type']}s"  # Convert type to collection name (e.g., 'museum' -> 'museums')
-            if collection_key in self.collection_dirs:
+            if collection_key in self.domain_config:
                 self._save_item(collection_key, doc)
             else:
                 print(f"Warning: Item type '{item['type']}' does not have a defined collection directory.")
@@ -196,7 +243,7 @@ class VectorStore:
         all_results = []
         
         # Search in each collection
-        for collection_name in self.collection_dirs.keys():
+        for collection_name in self.domain_config.keys():
             items_in_collection = self._load_items(collection_name)
             
             for item_doc in items_in_collection:
