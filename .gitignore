@@ -1,4 +1,5 @@
 # Ignorar archivos dentro de data independientemente de extensión
+dataaw/**
 data/**
 
 ### Python ###
