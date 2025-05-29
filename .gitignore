@@ -1,6 +1,6 @@
 # Ignorar archivos dentro de data independientemente de extensión
-data/**
 dataaw/**
+data/**
 
 ### Python ###
 __pycache__/
