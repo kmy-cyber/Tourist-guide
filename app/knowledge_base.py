@@ -1,48 +1,97 @@
-import json
-import os
 from typing import List
+from .data_managers.vector_store import VectorStore
+from .data_managers.data_ingestion import DataIngestionCoordinator
+import os
+import logging
+import json
+
+logger = logging.getLogger(__name__)
 
 class TourismKB:
     def __init__(self, data_dir: str):
         self.data_dir = data_dir
-        self._load_data()
+        self.vector_store = VectorStore(os.path.join(data_dir, 'vectors'))
+        self.ingestion_coordinator = DataIngestionCoordinator(data_dir)
+        self._initialize_data()
 
-    def _load_data(self):
-        self.attractions = {}
-        json_file = os.path.join(self.data_dir, "cuba_tourism_20250613.json")
-        
-        # Inicializar el diccionario
-        if os.path.exists(json_file):
-            with open(json_file, "r", encoding="utf-8") as f:
-                json_data = json.load(f)
-                if isinstance(json_data, dict):
-                    self.attractions = json_data
-                else:
-                    # Si el JSON es una lista, convertirla a diccionario
-                    self.attractions = {f"item_{i}": item for i, item in enumerate(json_data)}
-        
-        # Cargar descripciones detalladas
-        for i in range(8):  # Asumiendo 8 archivos de atracciones
-            attraction_id = f"attraction_{i}"
-            file_path = os.path.join(self.data_dir, f"cuba_attraction_{i}.txt")
-            if os.path.exists(file_path):
-                with open(file_path, "r", encoding="utf-8") as f:
-                    if attraction_id not in self.attractions:
-                        self.attractions[attraction_id] = {}
+    def _initialize_data(self):
+        """Initialize data if needed"""
+        vector_dir = os.path.join(self.data_dir, 'vectors')
+        # Si no existe el directorio de vectores o está vacío, ejecutar ingestión
+        if not os.path.exists(vector_dir) or not os.listdir(vector_dir):
+            logger.info("Vector store empty or not found. Running initial data ingestion...")
+            try:
+                self.ingestion_coordinator.run_ingestion()
+                logger.info("Initial data ingestion completed successfully")
+            except Exception as e:
+                logger.error(f"Error during initial data ingestion: {str(e)}")
+                # No lanzamos el error para permitir que el sistema funcione con datos existentes
 
-    def search(self, query: str) -> List[dict]:
+    def search(self, query: str, limit: int = 3) -> List[dict]:
         """
-        Búsqueda simple por coincidencia de palabras clave
+        Realizar búsqueda semántica en la base de conocimientos
         """
-        results = []
-        query_terms = query.lower().split()
-        
-        for attraction_id, data in self.attractions.items():
-            description = data.get("description", "").lower()
-            if any(term in description for term in query_terms):
-                results.append({
-                    "id": attraction_id,
-                    "data": data
+        try:
+            # Buscar en el vector store
+            results = self.vector_store.search(
+                query=query,
+                n_results=limit,
+                filters=None  # Podemos añadir filtros según el tipo de consulta
+            )
+            
+            # Transformar resultados al formato esperado
+            formatted_results = []
+            for result in results:
+                if not isinstance(result, dict) or 'metadata' not in result:
+                    logger.warning(f"Invalid result format: {result}")
+                    continue
+                    
+                metadata = result.get('metadata', {})
+                if not metadata:
+                    logger.warning(f"Result has no metadata: {result}")
+                    continue
+                    
+                formatted_results.append({
+                    "id": metadata.get('source', 'unknown'),
+                    "data": {
+                        "description": result.get('document', ''),
+                        "name": metadata.get('name', ''),
+                        "type": metadata.get('type', ''),
+                        "location": metadata.get('location', {}),
+                        "source_info": metadata.get('source_info', {}),
+                    }
                 })
-        
-        return results[:3]  # Retorna los 3 mejores resultados
+                
+            return formatted_results
+
+        except Exception as e:
+            logger.error(f"Error during search: {str(e)}")
+            return []  # Retornar lista vacía en caso de error
+            
+    def refresh_data(self):
+        """
+        Actualizar la base de conocimientos con nuevos datos
+        """
+        try:
+            logger.info("Starting data refresh...")
+            # Create a new vector store instance for the update
+            temp_vector_dir = os.path.join(self.data_dir, 'vectors_temp')
+            temp_vector_store = VectorStore(temp_vector_dir)
+            
+            # Run ingestion with new vector store
+            self.ingestion_coordinator.vector_store = temp_vector_store
+            self.ingestion_coordinator.run_ingestion()
+            
+            # If successful, replace old vector store
+            if os.path.exists(self.vector_store.persist_dir):
+                import shutil
+                shutil.rmtree(self.vector_store.persist_dir)
+            shutil.move(temp_vector_dir, self.vector_store.persist_dir)
+            
+            # Update vector store reference
+            self.vector_store = VectorStore(self.vector_store.persist_dir)
+            
+            logger.info("Data refresh completed successfully")
+        except Exception as e:
+            logger.error(f"Error during data refresh: {str(e)}")
+            raise

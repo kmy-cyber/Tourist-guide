@@ -1,6 +1,17 @@
-# Guía Turístico Virtual
+# Guía Turístico Virtual - Sistema Inteligente de Recomendación
 
-Sistema multiagente que actúa como guía turístico virtual para Cuba, especializado en museos y excursiones.
+Un sistema avanzado de asistencia turística que combina inteligencia artificial, procesamiento de lenguaje natural y búsqueda semántica para proporcionar información precisa y contextual sobre destinos turísticos en Cuba, con especialización en museos y excursiones.
+
+## Descripción General
+
+Este proyecto implementa un asistente turístico virtual que utiliza tecnologías de última generación para ofrecer:
+
+- 🤖 Procesamiento de lenguaje natural mediante Fireworks AI (Llama v3)
+- 🔍 Búsqueda semántica vectorial para recuperación precisa de información
+- 🗃️ Base de conocimientos especializada y actualizable
+- 🌐 Interfaz web interactiva construida con Streamlit
+- 📊 Sistema de confianza y validación de fuentes
+- 🔄 Actualización automática de datos mediante web crawling
 
 ## Funcionalidades
 
@@ -11,69 +22,196 @@ Sistema multiagente que actúa como guía turístico virtual para Cuba, especial
 - 🌐 Múltiples fuentes de datos oficiales
 - 📱 Interfaz responsive
 
-## Dominio del Sistema
+## Arquitectura del Sistema
 
-El sistema se especializa en dos áreas principales:
+### 🧠 Componentes Principales
 
-### 🏛️ Museos
-- Información detallada
-- Colecciones
-- Horarios
-- Precios
-- Servicios
-- Accesibilidad
+1. **Agente Virtual (TourGuideAgent)**
+   - Motor principal de procesamiento de consultas
+   - Gestión de contexto y confianza
+   - Integración con LLM y base de conocimientos
 
-### 🚶 Excursiones
-- Descripción detallada
-- Duración
-- Nivel de dificultad
-- Servicios incluidos
-- Puntos de encuentro
-- Requisitos
+2. **Modelo de Lenguaje (LLM)**
+   - Basado en Fireworks AI (Llama v3)
+   - Procesamiento contextual de consultas
+   - Generación de respuestas naturales
 
-## Requisitos
+3. **Base de Conocimientos (TourismKB)**
+   - Almacenamiento vectorial de información
+   - Búsqueda semántica avanzada
+   - Sistema de actualización de datos
 
-- Python 3.8+
-- Fireworks AI API key
-- 2GB+ de espacio en disco (para embeddings)
+4. **Interfaz Web (Streamlit)**
+   - Chat interactivo
+   - Indicadores de confianza
+   - Gestión de historial
+   - Panel de control administrativo
 
-## Instalación
+### 🎯 Dominio Especializado
 
-1. Clonar el repositorio
-2. Instalar dependencias:
-```bash
-pip install -r requirements.txt
+#### 🏛️ Museos
+- **Categorías**: Arte, Historia, Ciencia, Cultura
+- **Datos Estructurados**:
+  - Información detallada y validada
+  - Colecciones permanentes y temporales
+  - Horarios y tarifas actualizados
+  - Servicios y facilidades
+  - Accesibilidad y ubicación
+  - Metadatos de confiabilidad
+
+#### 🚶 Excursiones
+- **Categorías**: Urbanas, Naturaleza, Culturales
+- **Datos Estructurados**:
+  - Descripción detallada y verificada
+  - Duración y nivel de dificultad
+  - Servicios incluidos
+  - Puntos de encuentro
+  - Requisitos y recomendaciones
+  - Indicadores de calidad de datos
+
+## Arquitectura de Datos
+
+### Fuentes de Datos
+El sistema recolecta información de fuentes oficiales y confiables:
+
+- 🏛️ **Museos**:
+  - www.museoscuba.org (Oficial - Alta confiabilidad)
+  - www.artcubanacional.cult.cu (Oficial - Alta confiabilidad)
+  - www.ecured.cu (Enciclopedia - Media confiabilidad)
+
+- 🚶 **Excursiones**:
+  - www.cubatravel.cu (Oficial - Alta confiabilidad)
+  - www.cnpc.cult.cu (Oficial - Alta confiabilidad)
+
+### 🔄 Flujo de Datos
+
+1. **Recolección (Crawler)**
+   - Crawler especializado por tipo de contenido
+   - Sistema de registro de actualizaciones
+   - Gestión de fuentes por confiabilidad
+   - Almacenamiento raw con timestamping
+
+2. **Procesamiento (DataIngestionCoordinator)**
+   - Validación de campos obligatorios
+   - Normalización de formatos
+   - Enriquecimiento de metadatos
+   - Control de calidad de datos
+
+3. **Vectorización (VectorStore)**
+   - Generación de embeddings
+   - Indexación semántica
+   - Optimización de búsqueda
+   - Gestión de versiones
+
+4. **Recuperación (KnowledgeBase)**
+   - Búsqueda contextual
+   - Filtrado por relevancia
+   - Scoring de confiabilidad
+   - Caché de consultas frecuentes
+
+### 📁 Estructura de Almacenamiento
+
+```plaintext
+data/
+├── raw/              # Datos crudos del crawler
+│   └── YYYYMMDD/     # Organizados por fecha
+├── vectors/          # Índices vectoriales
+│   ├── museums/      # Vectores de museos
+│   ├── excursions/   # Vectores de excursiones
+│   └── destinations/ # Vectores de destinos
+└── cache/           # Caché de consultas frecuentes
 ```
-3. Copiar `.env.example` a `.env` y configurar:
-   - FIREWORKS_API_KEY
-   - Otras configuraciones opcionales
 
-## Estructura del Proyecto
+## ⚙️ Configuración y Despliegue
+
+### Requisitos del Sistema
+
+- **Software**
+  - Python 3.8+
+  - pip (gestor de paquetes)
+  - git (control de versiones)
+
+- **Hardware Recomendado**
+  - CPU: 2+ cores
+  - RAM: 4GB+ 
+  - Almacenamiento: 2GB+ (principalmente para embeddings)
+
+- **Credenciales**
+  - Fireworks AI API key (modelo LLaMA)
+
+### Instalación
+
+1. **Clonar el Repositorio**
+   ```bash
+   git clone <repository-url>
+   cd sim-ia-sri
+   ```
+
+2. **Crear y Activar Entorno Virtual**
+   ```bash
+   python -m venv venv
+   # En Windows
+   .\venv\Scripts\activate
+   # En Unix
+   source venv/bin/activate
+   ```
+
+3. **Instalar Dependencias**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Configurar Variables de Entorno**
+   ```bash
+   cp .env.example .env
+   # Editar .env y agregar:
+   # FIREWORKS_API_KEY=tu-api-key
+   # Otras configuraciones opcionales
+   ```
+
+### Verificación de Instalación
+
+```bash
+python -c "from app.agent import TourGuideAgent; print('✅ Instalación correcta')"
+```
+
+## 📂 Estructura del Proyecto
 
 ```
 app/
-├── agent.py          # Agente principal
-├── llm.py           # Interfaz con modelo de lenguaje
-├── models.py        # Modelos de datos
-├── knowledge_base.py # Base de conocimientos
-└── data_managers/
-    ├── crawler.py    # Recolección de datos
-    └── vector_store.py # Almacenamiento vectorial
+├── agent.py           # Agente principal de procesamiento
+│   ├── TourGuideAgent # Clase principal del sistema
+│   ├── _build_context # Generador de contexto para LLM 
+│   └── _calculate_confidence # Sistema de confiabilidad
+│
+├── llm.py            # Interfaz con modelo de lenguaje
+│   ├── LLM           # Wrapper para Fireworks AI
+│   └── generate      # Generación de respuestas
+│
+├── knowledge_base.py  # Gestión de conocimiento
+│   ├── TourismKB     # Clase principal de conocimiento
+│   ├── search        # Motor de búsqueda semántica
+│   └── refresh_data  # Actualización de datos
+│
+├── models.py         # Modelos de datos
+│   ├── UserQuery     # Estructura de consultas
+│   └── TourGuideResponse # Formato de respuestas
+│
+└── data_managers/    # Gestión de datos
+    ├── crawler.py     # Web scraping especializado
+    ├── data_ingestion.py # Coordinador de ingesta
+    └── vector_store.py  # Almacén vectorial
 
-data/               # Datos procesados
-├── raw/           # Datos sin procesar
-└── processed/     # Datos estructurados
+data/                # Repositorio de datos
+├── raw/             # Datos crudos del crawler
+├── vectors/         # Índices vectoriales
+│   ├── museums/     # Vectores de museos
+│   ├── excursions/  # Vectores de excursiones
+│   └── destinations/ # Vectores de destinos
+└── cache/          # Caché de consultas
 
-streamlit_app.py   # Interfaz de usuario
+streamlit_app.py    # Interfaz web interactiva
 ```
-
-## Fuentes de Datos
-
-- www.cubatravel.cu (Oficial)
-- www.museoscuba.org
-- www.ecured.cu
-- www.artcubanacional.cult.cu
-- www.cnpc.cult.cu
 
 ## Ejecutar la Aplicación
 
@@ -81,17 +219,46 @@ streamlit_app.py   # Interfaz de usuario
 streamlit run streamlit_app.py
 ```
 
-## Uso del Crawler
+## 🚀 Uso y Operación
 
-Para actualizar la base de datos:
+### Iniciar la Aplicación
 
 ```bash
-python -m app.data_managers.crawler
+streamlit run streamlit_app.py
 ```
 
-## Estructura de Datos
+La interfaz web estará disponible en `http://localhost:8501`
 
-### Museo
+### Funciones Administrativas
+
+1. **Actualización de Datos**
+   ```bash
+   # Actualización manual del crawler
+   python -m app.data_managers.crawler
+   
+   # O usar el botón "Actualizar Base de Datos" en la interfaz
+   ```
+
+2. **Monitoreo**
+   - Logs en `app.log`
+   - Panel de confianza en la interfaz
+   - Indicadores de fuentes
+
+### Interacción con el Sistema
+
+1. **Consultas Efectivas**
+   - Ser específico con ubicaciones y tipos
+   - Incluir preferencias de horario/precio
+   - Especificar tipo de actividad
+
+2. **Interpretación de Respuestas**
+   - Indicador de confianza (0-100%)
+   - Referencias a fuentes
+   - Sugerencias relacionadas
+
+## 📊 Modelos de Datos
+
+### Museos
 ```json
 {
   "id": "museum_123",
@@ -112,7 +279,7 @@ python -m app.data_managers.crawler
 }
 ```
 
-### Excursión
+### Excursiones
 ```json
 {
   "id": "excursion_456",
@@ -128,6 +295,59 @@ python -m app.data_managers.crawler
     "type": "fixed",
     "amount": 25.0,
     "currency": "USD"
+  },
+  "source_info": {
+    "type": "official",
+    "url": "https://www.cubatravel.cu",
+    "reliability": "high",
+    "last_updated": "2025-06-15"
+  },
+  "metadata": {
+    "category": "cultural",
+    "tags": ["historia", "arquitectura"],
+    "accessibility": "medium",
+    "languages": ["es", "en"]
   }
 }
 ```
+
+## 🔍 Características Técnicas
+
+### Sistema de Confiabilidad
+
+El sistema implementa un algoritmo de confiabilidad basado en:
+- Calidad de las fuentes
+- Frecuencia de actualización
+- Completitud de datos
+- Consistencia de información
+
+### Búsqueda Semántica
+
+Utiliza embeddings vectoriales para:
+- Entender el contexto de las consultas
+- Relacionar información similar
+- Priorizar resultados relevantes
+- Mantener consistencia temática
+
+### Gestión de Sesiones
+
+- Historial de conversación
+- Contexto persistente
+- Cache de consultas frecuentes
+- Estado de actualizaciones
+
+## 🤝 Contribución
+
+1. Fork el repositorio
+2. Cree una rama para su feature (`git checkout -b feature/AmazingFeature`)
+3. Commit sus cambios (`git commit -m 'Add some AmazingFeature'`)
+4. Push a la rama (`git push origin feature/AmazingFeature`)
+5. Abra un Pull Request
+
+## 📝 Licencia
+
+Este proyecto está licenciado bajo la Licencia MIT - ver el archivo `LICENSE` para detalles.
+
+## 📧 Contacto
+
+Para preguntas y soporte, por favor abra un issue en el repositorio.
