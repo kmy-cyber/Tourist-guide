@@ -3,6 +3,7 @@ import asyncio
 import os
 from app.agent import TourGuideAgent
 from app.models import UserQuery
+from app.expert_system import QUERY_TYPES
 import logging
 import threading
 import time
@@ -25,15 +26,6 @@ st.set_page_config(
     page_icon="🏖️",
     layout="wide"
 )
-
-# Título y descripción
-st.title("🏖️ Guía Turístico Virtual de Cuba")
-st.markdown("""
-Este sistema especializado te ayuda a explorar:
-- 🏛️ Museos de arte, historia, ciencia y cultura
-- 🚶 Excursiones urbanas y en la naturaleza
-- 📍 Lugares de interés turístico
-""")
 
 # Inicializar el agente
 @st.cache_resource
@@ -58,11 +50,46 @@ if "messages" not in st.session_state:
 # Interface principal
 col1, col2 = st.columns([2, 1])
 
+# Sidebar con componente del clima
+with st.sidebar:
+    st.header("🌡️ Consulta el Clima")
+    ciudad_selected = st.selectbox(
+        "Selecciona una ciudad:",
+        agent.ciudades_cuba,
+        index=0
+    )
+    if st.button("Ver clima actual"):
+        with st.spinner("Consultando el clima..."):
+            weather_report = agent.weather_service.get_weather_report(ciudad_selected)
+            if weather_report:
+                st.markdown(weather_report, unsafe_allow_html=True)
+            else:
+                st.error("No se pudo obtener la información del clima en este momento.")
+
+    st.markdown("---")
+    st.header("🎯 Enfoque del Sistema")
+    st.markdown("""
+    ### Museos
+    - Arte y cultura
+    - Historia
+    - Ciencia
+    - Colecciones especiales
+    
+    ### Excursiones
+    - Tours urbanos
+    - Rutas culturales
+    - Senderos naturales
+    - Aventuras temáticas
+    """)
+
 with col1:
     # Mostrar mensajes anteriores
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+            if isinstance(message["content"], str) and "<!DOCTYPE html>" not in message["content"]:
+                st.markdown(message["content"], unsafe_allow_html=True)
+            else:
+                st.markdown(message["content"], unsafe_allow_html=True)
             if "confidence" in message:
                 conf_color = "green" if message["confidence"] > 0.7 else "yellow" if message["confidence"] > 0.4 else "red"
                 st.progress(message["confidence"], text=f"Confianza: {message['confidence']:.0%}")
@@ -70,7 +97,7 @@ with col1:
                 st.caption(f"📚 Fuentes: {', '.join(message['sources'])}")
 
     # Input del usuario
-    if prompt := st.chat_input("¿Qué te gustaría saber sobre museos o excursiones en Cuba?"):
+    if prompt := st.chat_input("¿Qué te gustaría saber sobre Cuba?"):
         # Añadir mensaje del usuario
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -78,12 +105,16 @@ with col1:
 
         # Generar respuesta
         with st.chat_message("assistant"):
-            with st.spinner("Buscando información..."):
+            with st.spinner("Analizando tu consulta..."):
                 try:
-                    response = asyncio.run(fetch_response(UserQuery(text=prompt)))
+                    # Usar asyncio para manejar la corutina
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    response = loop.run_until_complete(fetch_response(UserQuery(text=prompt)))
+                    loop.close()
                     
                     if response and not response.error:
-                        st.markdown(response.answer)
+                        st.markdown(response.answer, unsafe_allow_html=True)
                         
                         # Mostrar nivel de confianza
                         conf_color = "green" if response.confidence > 0.7 else "yellow" if response.confidence > 0.4 else "red"
@@ -108,27 +139,6 @@ with col1:
                     st.error("Ocurrió un error inesperado. Por favor, intenta de nuevo.")
 
 with col2:
-    st.sidebar.header("🎯 Enfoque del Sistema")
-    st.sidebar.markdown("""
-    ### Museos
-    - Arte y cultura
-    - Historia
-    - Ciencia
-    - Colecciones especiales
-    
-    ### Excursiones
-    - Tours urbanos
-    - Naturaleza
-    - Recorridos culturales
-    
-    ### Información Disponible
-    - 📍 Ubicaciones
-    - ⏰ Horarios
-    - 💰 Precios
-    - ℹ️ Descripciones
-    - 🎫 Servicios
-    """)
-    
     # Botón para actualizar datos
     if st.sidebar.button("🔄 Actualizar Base de Datos"):
         placeholder = st.sidebar.empty()
