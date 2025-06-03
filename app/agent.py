@@ -90,6 +90,10 @@ Fuente: {source_info.get('type', 'No especificada')} (Confiabilidad: {reliabilit
 
     async def process_query(self, query: UserQuery) -> TourGuideResponse:
         try:
+            # Initialize variables
+            weather_report = None
+            weather_extra = ""
+            
             # Analizar la consulta con el sistema experto
             info_consulta = analizar_consulta(query.text, self.ciudades_cuba)
             
@@ -103,12 +107,13 @@ Fuente: {source_info.get('type', 'No especificada')} (Confiabilidad: {reliabilit
             confidence = self._calculate_confidence(relevant_info)
             
             # Obtener información del clima si es necesario
-            weather_extra = ""
             ciudad = info_consulta.ciudad
             if ciudad:
                 weather_report = self.weather_service.get_weather_report(ciudad)
                 if weather_report:
                     weather_extra = f"\n\nInformación del clima en {ciudad}:\n{weather_report}"
+                    # Aumentar confianza si tenemos datos del clima
+                    confidence = max(confidence, 0.8)
 
             # Si es consulta específica de clima
             if info_consulta.tipo == QUERY_TYPES['CLIMA']:
