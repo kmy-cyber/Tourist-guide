@@ -25,7 +25,6 @@ class TourismKB:
                 logger.info("Initial data ingestion completed successfully")
             except Exception as e:
                 logger.error(f"Error during initial data ingestion: {str(e)}")
-                # No lanzamos el error para permitir que el sistema funcione con datos existentes
 
     def search(self, query: str, limit: int = 3) -> List[dict]:
         """
@@ -36,7 +35,7 @@ class TourismKB:
             results = self.vector_store.search(
                 query=query,
                 n_results=limit,
-                filters=None  # Podemos añadir filtros según el tipo de consulta
+                filters=None
             )
             
             # Transformar resultados al formato esperado
@@ -66,31 +65,30 @@ class TourismKB:
 
         except Exception as e:
             logger.error(f"Error during search: {str(e)}")
-            return []  # Retornar lista vacía en caso de error
+            return []
             
+    async def async_search(self, query: str, limit: int = 3) -> List[dict]:
+        """
+        Versión asíncrona de la búsqueda semántica
+        """
+        return self.search(query, limit)
+
     def refresh_data(self):
-        """
-        Actualizar la base de conocimientos con nuevos datos
-        """
+        """Actualizar la base de conocimientos con nuevos datos"""
         try:
             logger.info("Starting data refresh...")
-            # Create a new vector store instance for the update
             temp_vector_dir = os.path.join(self.data_dir, 'vectors_temp')
             temp_vector_store = VectorStore(temp_vector_dir)
             
-            # Run ingestion with new vector store
             self.ingestion_coordinator.vector_store = temp_vector_store
             self.ingestion_coordinator.run_ingestion()
             
-            # If successful, replace old vector store
             if os.path.exists(self.vector_store.persist_dir):
                 import shutil
                 shutil.rmtree(self.vector_store.persist_dir)
             shutil.move(temp_vector_dir, self.vector_store.persist_dir)
             
-            # Update vector store reference
             self.vector_store = VectorStore(self.vector_store.persist_dir)
-            
             logger.info("Data refresh completed successfully")
         except Exception as e:
             logger.error(f"Error during data refresh: {str(e)}")
