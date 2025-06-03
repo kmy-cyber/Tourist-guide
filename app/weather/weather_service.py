@@ -1,48 +1,45 @@
 from datetime import datetime
-from typing import Dict, Tuple, Optional, List
-import requests
+from typing import Optional
+import logging
 from .weather import WeatherAgent, WeatherInfo
+
+logger = logging.getLogger(__name__)
 
 class WeatherService:
     """Service class to handle weather-related API calls and processing"""
     
     def __init__(self):
         self.weather_agent = WeatherAgent()
+        self.logger = logging.getLogger(__name__)
 
-    def get_weather_report(self, city: str, time_range: str = 'today') -> Optional[str]:
+    def get_weather_report(self, city: str) -> Optional[str]:
         """
-        Get a formatted weather report for a city
+        Obtiene un reporte del clima formateado para una ciudad
         
         Args:
-            city (str): Name of the city in Cuba
-            time_range (str): One of 'today', 'tomorrow', 'weekend', 'week'
+            city (str): Nombre de la ciudad en Cuba
             
         Returns:
-            str: Formatted weather report or None if city not found
+            str: Reporte del clima formateado en HTML o None si no se encuentra la ciudad
         """
+        self.logger.info(f"Solicitando reporte del clima para ciudad: {city}")
         try:
-            # Get weather information using the agent
-            weather_info = self.weather_agent.get_weather_info(city, time_range)
+            # Obtener información del clima usando el agente
+            weather_info = self.weather_agent.get_weather_info(city)
             
             if not weather_info:
+                self.logger.warning(f"No se encontró información del clima para {city}")
                 return None
                 
-            # Generate human-friendly summary
+            self.logger.info(f"Reporte del clima generado exitosamente para {city}")
+            # Generar resumen amigable
             return self.weather_agent.generate_weather_summary(weather_info)
             
         except Exception as e:
-            print(f"Error getting weather report for {city}: {e}")
+            self.logger.error(f"Error obteniendo el reporte del clima para {city}: {e}")
             return None
 
-    async def get_weather_async(self, city: str, time_range: str = 'today') -> Optional[str]:
-        """
-        Async version of get_weather_report for use with async applications
-        
-        Args:
-            city (str): Name of the city in Cuba
-            time_range (str): One of 'today', 'tomorrow', 'weekend', 'week'
-            
-        Returns:
-            str: Formatted weather report or None if city not found
-        """
-        return self.get_weather_report(city, time_range)
+    async def get_weather_async(self, city: str) -> Optional[str]:
+        """Versión asíncrona del reporte del clima"""
+        self.logger.info(f"[Async] Solicitando reporte del clima para ciudad: {city}")
+        return self.get_weather_report(city)

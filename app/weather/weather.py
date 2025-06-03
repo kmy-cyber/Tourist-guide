@@ -1,134 +1,106 @@
 import requests
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
+from typing import Dict, Optional
+import logging
+import os
 
-@dataclass
+logger = logging.getLogger(__name__)
+
 class WeatherInfo:
-    city: str
-    current_temp: float
-    feels_like: float
-    description: str
-    daily_forecast: List[Dict]
+    def __init__(self, city: str, data: Dict):
+        self.city = city
+        self.current_temp = data['main']['temp']
+        self.feels_like = data['main']['feels_like']
+        self.description = data['weather'][0]['description']
+        self.humidity = data['main']['humidity']
+        self.wind_speed = data['wind']['speed']
+        self.timestamp = datetime.fromtimestamp(data['dt'])
     
 class WeatherAgent:
-    def __init__(self, api_key: str = 'none'):
-        self.api_key = api_key
-        self.geocoding_url = 'http://api.openweathermap.org/geo/1.0/direct'
-        self.weather_url = 'https://api.openweathermap.org/data/3.0/onecall'
-
-    def get_weather_info(self, city: str, time_range: str = 'today') -> Optional[WeatherInfo]:
+    def __init__(self, api_key: str = None):
+        self.api_key = api_key or os.getenv('OPENWEATHER_API_KEY', 'aa312bf7e5f2def3551a65b859f5e3ad')
+        self.weather_url = 'https://api.openweathermap.org/data/2.5/weather'
+        
+    def get_weather_info(self, city: str) -> Optional[WeatherInfo]:
         """
-        Get weather information for a given city and time range
+        Obtiene información del clima actual para una ciudad
         
         Args:
-            city (str): Name of the city in Cuba
-            time_range (str): One of 'today', 'tomorrow', 'weekend', 'week'
+            city (str): Nombre de la ciudad
             
         Returns:
-            WeatherInfo object or None if city not found
+            WeatherInfo object o None si no se encuentra la ciudad
         """
+        logger.info(f"Solicitando información del clima para ciudad: {city}")
         try:
-            lat, lon = self._get_coordinates(city)
-            weather_data = self._get_weather(lat, lon)
-            
-            if not weather_data or 'current' not in weather_data:
+            data = self._get_current_weather(city)
+            if not data:
                 return None
-                
-            return WeatherInfo(
-                city=city,
-                current_temp=weather_data['current']['temp'],
-                feels_like=weather_data['current']['feels_like'],
-                description=weather_data['current']['weather'][0]['description'],
-                daily_forecast=self._filter_forecast(weather_data['daily'], time_range)
-            )
+            return WeatherInfo(city, data)
         except Exception as e:
-            print(f"Error getting weather for {city}: {e}")
+            logger.error(f"Error obteniendo el clima para {city}: {e}")
             return None
 
-    def _get_coordinates(self, city: str) -> Tuple[float, float]:
-        """Get coordinates for a city in Cuba"""
-        params = {
-            'q': f'{city},CU',
-            'limit': 1,
-            'appid': self.api_key
-        }
-        response = requests.get(self.geocoding_url, params=params)
-        data = response.json()
-
-        if not data:
-            raise ValueError(f'Ciudad {city} no encontrada en Cuba.')
-
-        return data[0]['lat'], data[0]['lon']
-
-    def _get_weather(self, lat: float, lon: float) -> Dict:
-        """Get weather data from OpenWeather API"""
-        params = {
-            'lat': lat,
-            'lon': lon,
-            'appid': self.api_key,
-            'lang': 'es',
-            'units': 'metric',
-            'exclude': 'minutely,hourly,alerts'
-        }
-        response = requests.get(self.weather_url, params=params)
-        return response.json()
-
-    def _filter_forecast(self, daily_data: List[Dict], time_range: str) -> List[Dict]:
-        """Filter forecast data based on requested time range"""
-        if time_range == 'today':
-            return daily_data[:1]
-        elif time_range == 'tomorrow':
-            return daily_data[1:2]
-        elif time_range == 'weekend':
-            # Get upcoming weekend days
-            today = datetime.now()
-            days_ahead = 5 - today.weekday()  # Days until Saturday
-            if days_ahead <= 0:
-                days_ahead += 7
-            weekend_days = [today + timedelta(days=i) for i in range(days_ahead, days_ahead + 2)]
-            return [day for day in daily_data if datetime.fromtimestamp(day['dt']).date() in [w.date() for w in weekend_days]]
-        else:  # week
-            return daily_data[:7]
+    def _get_current_weather(self, city: str) -> Optional[Dict]:
+        """Obtiene el clima actual de la API de OpenWeather"""
+        try:
+            response = requests.get(
+                self.weather_url,
+                params={
+                    "q": f"{city},CU",
+                    "appid": self.api_key,
+                    "units": "metric",
+                    "lang": "es"
+                },
+                timeout=10  # Aumentamos el timeout a 10 segundos
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"Error HTTP al obtener clima: {response.status_code} - {response.text}")
+                return None
+                
+            return response.json()
+            
+        except requests.Timeout:
+            logger.error(f"Timeout al obtener clima para {city}")
+            return None
+        except Exception as e:
+            logger.error(f"Error en _get_current_weather: {str(e)}")
+            return None
 
     def generate_weather_summary(self, weather_info: WeatherInfo) -> str:
-        """
-        Generate a natural language summary of weather information
-        """
+        """Genera un resumen del clima en formato HTML para mejor visualización"""
         if not weather_info:
             return "Lo siento, no pude obtener la información del clima para esa ubicación."
 
-        # Formato base del resumen
-        summary = [
-            f"🌡️ Clima actual en {weather_info.city}:",
-            f"Temperatura: {weather_info.current_temp}°C",
-            f"Sensación térmica: {weather_info.feels_like}°C",
-            f"Condiciones: {weather_info.description.capitalize()}",
-            "\n📅 Pronóstico:"
-        ]
-
-        # Agregar pronóstico diario
-        for day in weather_info.daily_forecast:
-            date = datetime.fromtimestamp(day['dt']).strftime('%d/%m/%Y')
-            temp = day['temp']['day']
-            desc = day['weather'][0]['description']
-            summary.append(f"- {date}: {temp}°C, {desc}")
-
-        # Detectar condiciones especiales
-        risks = []
-        for day in weather_info.daily_forecast:
-            temp = day['temp']['day']
-            desc = day['weather'][0]['description'].lower()
-            
-            if temp > 35:
-                risks.append("⚠️ Calor extremo")
-            if 'lluvia' in desc or 'tormenta' in desc:
-                risks.append("🌧️ Posibilidad de lluvia")
-            if 'tormenta' in desc:
-                risks.append("⛈️ Riesgo de tormentas")
-
-        if risks:
-            summary.append("\n⚠️ Alertas y consideraciones:")
-            summary.extend(list(set(risks)))  # Eliminar duplicados
-
-        return "\n".join(summary)
+        # Emoji según descripción del clima
+        weather_emojis = {
+            'clear': '☀️',
+            'cloud': '☁️',
+            'rain': '🌧️',
+            'storm': '⛈️',
+            'snow': '❄️',
+            'mist': '🌫️',
+            'default': '🌡️'
+        }
+        
+        emoji = next((v for k, v in weather_emojis.items() if k in weather_info.description.lower()), weather_emojis['default'])
+        
+        # Crear tarjeta de clima con estilo
+        html = f"""
+        <div style="padding: 1rem; border-radius: 10px; background: linear-gradient(135deg, #00B4DB, #0083B0); color: white; margin: 1rem 0;">
+            <h3 style="margin: 0; color: white;">{emoji} Clima en {weather_info.city}</h3>
+            <div style="display: flex; justify-content: space-between; margin-top: 1rem;">
+                <div>
+                    <h2 style="margin: 0; font-size: 2em;">{weather_info.current_temp:.1f}°C</h2>
+                    <p style="margin: 0.5rem 0;">Sensación: {weather_info.feels_like:.1f}°C</p>
+                </div>
+                <div style="text-align: right;">
+                    <p style="margin: 0;">{weather_info.description.capitalize()}</p>
+                    <p style="margin: 0;">💨 {weather_info.wind_speed} m/s</p>
+                    <p style="margin: 0;">💧 {weather_info.humidity}%</p>
+                </div>
+            </div>
+        </div>
+        """
+        return html
