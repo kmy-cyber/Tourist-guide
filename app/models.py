@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict, Union, Any
 
 class UserQuery(BaseModel):
     text: str
@@ -29,3 +29,4 @@ class TourGuideResponse(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     items: Optional[List[TourismItem]] = None
     error: Optional[str] = None
+    map_data: Optional[Any] = None  # Para el mapa de Folium
