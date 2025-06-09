@@ -1,12 +1,9 @@
 import streamlit as st
 import asyncio
 import os
-from app.agent import TourGuideAgent
-from app.models import UserQuery
-from app.expert_system import QUERY_TYPES
+from app.models import UserQuery, TourGuideResponse
+from app.agents.coordinator_agent import CoordinatorAgent
 import logging
-import threading
-import time
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO)
@@ -27,20 +24,29 @@ st.set_page_config(
     layout="wide"
 )
 
-# Inicializar el agente
+# Título y descripción
+st.title("🏖️ Guía Turístico Virtual de Cuba")
+st.markdown("""
+Este sistema especializado te ayuda a explorar:
+- 🏛️ Museos de arte, historia, ciencia y cultura
+- 🚶 Excursiones urbanas y en la naturaleza
+- 📍 Lugares de interés turístico
+""")
+
+# Inicializar el agente coordinador
 @st.cache_resource
-def get_agent():
+def get_coordinator():
     data_dir = os.path.join(os.path.dirname(__file__), "data")
-    return TourGuideAgent(data_dir)
+    return CoordinatorAgent(data_dir)
 
-agent = get_agent()
+coordinator = get_coordinator()
 
-# Helper async para llamar al agente
-async def fetch_response(query: UserQuery):
+# Helper async para procesar consultas
+async def process_query(query: UserQuery) -> Optional[TourGuideResponse]:
     try:
-        return await agent.process_query(query)
+        return await coordinator.coordinate(query)
     except Exception as e:
-        logger.error(f"Error processing query: {e}")
+        logger.error(f"Error in Streamlit app: {str(e)}", exc_info=True)
         return None
 
 # Área de chat
@@ -50,51 +56,30 @@ if "messages" not in st.session_state:
 # Interface principal
 col1, col2 = st.columns([2, 1])
 
-# Sidebar con componente del clima
-with st.sidebar:
-    st.header("🌡️ Consulta el Clima")
-    ciudad_selected = st.selectbox(
-        "Selecciona una ciudad:",
-        agent.ciudades_cuba,
-        index=0
-    )
-    if st.button("Ver clima actual"):
-        with st.spinner("Consultando el clima..."):
-            weather_report = agent.weather_service.get_weather_report(ciudad_selected)
-            if weather_report:
-                st.markdown(weather_report, unsafe_allow_html=True)
-            else:
-                st.error("No se pudo obtener la información del clima en este momento.")
-
-    st.markdown("---")
-    st.header("🎯 Enfoque del Sistema")
-    st.markdown("""
-    ### Museos
-    - Arte y cultura
-    - Historia
-    - Ciencia
-    - Colecciones especiales
-    
-    ### Excursiones
-    - Tours urbanos
-    - Rutas culturales
-    - Senderos naturales
-    - Aventuras temáticas
-    """)
-
 with col1:
     # Mostrar mensajes anteriores
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
-            if isinstance(message["content"], str) and "<!DOCTYPE html>" not in message["content"]:
-                st.markdown(message["content"], unsafe_allow_html=True)
-            else:
-                st.markdown(message["content"], unsafe_allow_html=True)
+            st.markdown(message["content"])
             if "confidence" in message:
-                conf_color = "green" if message["confidence"] > 0.7 else "yellow" if message["confidence"] > 0.4 else "red"
+                # Calcular color de confianza
+                if message["confidence"] > 0.7:
+                    conf_color = "green"
+                elif message["confidence"] > 0.4:
+                    conf_color = "yellow"
+                else:
+                    conf_color = "red"
                 st.progress(message["confidence"], text=f"Confianza: {message['confidence']:.0%}")
+                
             if "sources" in message and message["sources"]:
                 st.caption(f"📚 Fuentes: {', '.join(message['sources'])}")
+            
+            # Mostrar mapa si está disponible
+            if "map_data" in message and message["map_data"]:
+                st.components.v1.html(
+                    message["map_data"]._repr_html_(), 
+                    height=400
+                )
 
     # Input del usuario
     if prompt := st.chat_input("¿Qué te gustaría saber sobre Cuba?"):
@@ -105,65 +90,47 @@ with col1:
 
         # Generar respuesta
         with st.chat_message("assistant"):
-            with st.spinner("Analizando tu consulta..."):
-                try:
-                    # Usar asyncio para manejar la corutina
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    response = loop.run_until_complete(fetch_response(UserQuery(text=prompt)))
-                    loop.close()
+            with st.spinner("Procesando tu consulta..."):
+                query = UserQuery(text=prompt)
+                response = asyncio.run(process_query(query))
+                
+                if response:
+                    st.markdown(response.answer)
                     
-                    if response and not response.error:
-                        st.markdown(response.answer, unsafe_allow_html=True)
-                        
-                        # Mostrar nivel de confianza
-                        conf_color = "green" if response.confidence > 0.7 else "yellow" if response.confidence > 0.4 else "red"
-                        st.progress(response.confidence, text=f"Confianza en la respuesta: {response.confidence:.0%}")
-                        
-                        # Mostrar fuentes
-                        if response.sources:
-                            st.caption(f"📚 Fuentes consultadas: {', '.join(response.sources)}")
-                        
-                        # Guardar en historial
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": response.answer,
-                            "confidence": response.confidence,
-                            "sources": response.sources
-                        })
+                    # Guardar mensaje en el historial
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": response.answer,
+                        "sources": response.sources,
+                        "confidence": response.confidence,
+                        "map_data": response.map_data
+                    })
+                    
+                    # Mostrar confianza
+                    if response.confidence > 0.7:
+                        conf_color = "green"
+                    elif response.confidence > 0.4:
+                        conf_color = "yellow"
                     else:
-                        st.error("Lo siento, hubo un error al procesar tu consulta. Por favor, intenta de nuevo.")
-                        
-                except Exception as e:
-                    logger.error(f"Error in Streamlit app: {e}")
-                    st.error("Ocurrió un error inesperado. Por favor, intenta de nuevo.")
-
-with col2:
-    # Botón para actualizar datos
-    if st.sidebar.button("🔄 Actualizar Base de Datos"):
-        placeholder = st.sidebar.empty()
-        try:
-            placeholder.info("⏳ Actualizando datos... Por favor espere.")
-            # Run refresh directly - no threading needed since Streamlit handles this
-            agent.kb.refresh_data()
-            placeholder.success("✅ Base de datos actualizada exitosamente")
-            time.sleep(2)
-            placeholder.empty()
-            st.rerun()
-        except Exception as e:
-            placeholder.error(f"❌ Error al actualizar: {str(e)}")
-            time.sleep(5)
-            placeholder.empty()
-            st.rerun()
-
-    # Botón para limpiar historial
-    if st.sidebar.button("🗑️ Limpiar Historial"):
-        st.session_state.messages = []
-        st.rerun()
-
-# Verificar API key
-if "FIREWORKS_API_KEY" not in os.environ:
-    st.warning(
-        "⚠️ No se encontró la API key de Fireworks. "
-        "Asegúrate de configurar el archivo .env con tu API key."
-    )
+                        conf_color = "red"
+                    st.progress(response.confidence, text=f"Confianza: {response.confidence:.0%}")
+                    
+                    # Mostrar fuentes
+                    if response.sources:
+                        st.caption(f"📚 Fuentes: {', '.join(response.sources)}")
+                    
+                    # Mostrar mapa si está disponible
+                    if response.map_data:
+                        st.components.v1.html(
+                            response.map_data._repr_html_(), 
+                            height=400
+                        )
+                else:
+                    error_message = "Lo siento, ocurrió un error procesando tu consulta. Por favor, inténtalo de nuevo."
+                    st.error(error_message)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": error_message,
+                        "confidence": 0.1,
+                        "sources": []
+                    })

@@ -149,9 +149,9 @@ Instrucciones específicas:
 
 Si la información proporcionada no es suficiente, indica qué detalles podrían faltar."""
 
-            answer = await self.llm.generate(
-                prompt=query.text,
-                context=system_prompt
+            answer = await self.llm.generate_response(
+                system_prompt=system_prompt,
+                user_prompt=query.text
             )
             
             sources = [info['id'] for info in relevant_info]
