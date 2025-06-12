@@ -1,71 +1,63 @@
 """
-Agente especializado en información meteorológica.
+Agente especializado en obtener y procesar información del clima.
 """
-from typing import Optional
+from typing import Optional, Dict, Any
 from .base_agent import BaseAgent
-from .interfaces import IWeatherAgent, AgentContext
+from .interfaces import IWeatherAgent, AgentContext, AgentType
 from ..weather.weather_service import WeatherService
-import re
 
 class WeatherAgent(BaseAgent, IWeatherAgent):
-    """Agente que maneja información meteorológica"""
+    """Agente que maneja la información del clima"""
     
     def __init__(self):
         """Inicializa el agente del clima"""
-        super().__init__()
+        super().__init__(AgentType.WEATHER)
         self.weather_service = WeatherService()
         
-        # Lista de ciudades conocidas para detección
-        self.known_cities = [
-            "La Habana", "Santiago de Cuba", "Camagüey", "Holguín", 
-            "Santa Clara", "Bayamo", "Cienfuegos", "Pinar del Río",
-            "Matanzas", "Ciego de Ávila", "Las Tunas", "Sancti Spíritus",
-            "Guantánamo", "Artemisa", "Mayabeque"
-        ]
-    
-    def _extract_city(self, text: str) -> Optional[str]:
+    async def process(self, context: AgentContext) -> AgentContext:
         """
-        Extrae el nombre de una ciudad del texto si está presente.
+        Procesa el contexto para obtener información del clima.
+        
+        Args:
+            context: Contexto actual
+            
+        Returns:
+            Contexto actualizado con información del clima
         """
-        text = text.lower()
-        for city in self.known_cities:
-            if city.lower() in text:
-                return city
-        return None
-    
-    async def get_weather(self, location: str) -> Optional[str]:
+        try:
+            # Obtener información del clima para cada ubicación
+            for location in context.locations:
+                weather_info = await self.get_weather(location["name"])
+                if weather_info:
+                    context.weather_info[location["name"]] = weather_info
+                    self.add_source(context, f"OpenWeather - {location['name']}")
+            
+            if context.weather_info:
+                self.update_context_confidence(context, 0.8, weight=0.3)
+            
+            return context
+            
+        except Exception as e:
+            self.set_error(context, f"Error getting weather: {str(e)}")
+            return context
+            
+    async def get_weather(self, location: str) -> Optional[Dict[str, Any]]:
         """
-        Obtiene la información del clima para una ubicación.
+        Obtiene información del clima para una ubicación.
         
         Args:
             location: Nombre de la ubicación
             
         Returns:
-            Información del clima formateada o None si no está disponible
+            Información del clima o None si no se encuentra
         """
         try:
-            weather_info = await self.weather_service.get_weather_async(location)
-            if weather_info:
-                return f"""### 🌤️ Clima en {location}
-{weather_info}"""
-            return None
+            if weather_report := await self.weather_service.get_weather_async(location):
+                return {
+                    "ciudad": location,
+                    "report": weather_report
+                }
         except Exception as e:
-            self.logger.error(f"Error getting weather for {location}: {str(e)}")
-            return None
-    
-    async def _process_impl(self, context: AgentContext) -> AgentContext:
-        """
-        Procesa el contexto buscando información meteorológica relevante.
-        """
-        # Extraer ciudad del contexto
-        city = self._extract_city(context.query)
-        
-        if city:
-            weather_info = await self.get_weather(city)
-            if weather_info:
-                # Guardar información del clima en metadata
-                context.metadata['weather_info'] = weather_info
-                context.sources.append(f"OpenWeather - {city}")
-                context.confidence = max(context.confidence, 0.8)
-        
-        return context
+            self.logger.warning(f"Error getting weather for {location}: {str(e)}")
+            
+        return None
