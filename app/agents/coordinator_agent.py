@@ -1,20 +1,18 @@
 """
 Agente coordinador que orquesta la interacción entre agentes especializados.
 """
-from typing import Dict, List
+from typing import Dict, List, Optional, Type
 from .base_agent import BaseAgent
 from .interfaces import (
-    IAgent, ICoordinatorAgent, AgentContext,
-    IKnowledgeAgent, IWeatherAgent, ILocationAgent, ILLMAgent
+    IAgent, ICoordinatorAgent, AgentContext, AgentType,
+    IKnowledgeAgent, IWeatherAgent, ILocationAgent, ILLMAgent, IUIAgent
 )
-from .knowledge_agent import KnowledgeAgent
-from .weather_agent import WeatherAgent
-from .location_agent import LocationAgent
-from .llm_agent import LLMAgent
-from ..models import UserQuery, TourGuideResponse
 
 class CoordinatorAgent(BaseAgent, ICoordinatorAgent):
-    """Agente coordinador del sistema"""
+    """
+    Agente coordinador del sistema.
+    Orquesta la interacción entre los diferentes agentes especializados.
+    """
     
     def __init__(self, data_dir: str):
         """
@@ -23,94 +21,91 @@ class CoordinatorAgent(BaseAgent, ICoordinatorAgent):
         Args:
             data_dir: Directorio base para los datos
         """
-        super().__init__()
-        self.agents: Dict[str, IAgent] = {}
-        self._setup_agents(data_dir)
-    
-    def _setup_agents(self, data_dir: str):
-        """
-        Configura los agentes especializados.
-        """
-        # Crear y registrar agentes
-        self.register_agent(KnowledgeAgent(data_dir))
-        self.register_agent(WeatherAgent())
-        self.register_agent(LocationAgent())
-        self.register_agent(LLMAgent())
-    
+        super().__init__(AgentType.COORDINATOR)
+        self.data_dir = data_dir
+        self.agents: Dict[AgentType, IAgent] = {}
+        
     def register_agent(self, agent: IAgent) -> None:
         """
         Registra un nuevo agente en el sistema.
-        """
-        self.agents[agent.agent_type] = agent
-        self.logger.info(f"Registered agent: {agent.agent_type}")
-    
-    def _get_agent_by_type(self, agent_type: type) -> IAgent:
-        """
-        Obtiene un agente por su tipo de interfaz.
-        """
-        for agent in self.agents.values():
-            if isinstance(agent, agent_type):
-                return agent
-        raise ValueError(f"No agent found for type: {agent_type.__name__}")
-    
-    async def coordinate(self, query: UserQuery) -> TourGuideResponse:
-        """
-        Coordina el procesamiento de una consulta del usuario.
         
         Args:
-            query: La consulta del usuario
+            agent: Agente a registrar
+        """
+        self.agents[agent.agent_type] = agent
+        self.logger.info(f"Registered agent: {agent.agent_type.name}")
+        
+    def get_agent(self, agent_type: AgentType) -> Optional[IAgent]:
+        """
+        Obtiene un agente por su tipo.
+        
+        Args:
+            agent_type: Tipo de agente a buscar
             
         Returns:
-            TourGuideResponse con la respuesta procesada
+            El agente si existe, None en caso contrario
         """
-        try:
-            # Crear contexto inicial
-            context = AgentContext(query=query.text)
+        return self.agents.get(agent_type)
+        
+    async def initialize(self) -> None:
+        """Inicializa todos los agentes registrados"""
+        for agent in self.agents.values():
+            await agent.initialize()
             
-            # 1. Búsqueda de conocimiento
-            knowledge_agent = self._get_agent_by_type(IKnowledgeAgent)
-            context = await knowledge_agent.process(context)
+    async def cleanup(self) -> None:
+        """Limpia recursos de todos los agentes"""
+        for agent in self.agents.values():
+            await agent.cleanup()
+
+    async def process(self, context: AgentContext) -> AgentContext:
+        """
+        Procesa una consulta coordinando múltiples agentes.
+        
+        Args:
+            context: Contexto con la consulta
             
-            # 2. Información del clima
-            weather_agent = self._get_agent_by_type(IWeatherAgent)
-            context = await weather_agent.process(context)
-            
-            # 3. Generación de respuesta
-            llm_agent = self._get_agent_by_type(ILLMAgent)
-            context = await llm_agent.process(context)
-            
-            # 4. Procesamiento de ubicaciones
-            location_agent = self._get_agent_by_type(ILocationAgent)
-            context = await location_agent.process(context)
-            
-            # Construir respuesta final
-            response_text = context.metadata.get('llm_response', '')
-            
-            # Agregar mapa si hay ubicaciones
-            map_obj = context.metadata.get('locations_map')
-            if map_obj:
-                response_text = response_text.rstrip() + "\n\n"
-            
-            return TourGuideResponse(
-                answer=response_text,
-                sources=list(set(context.sources)),
-                confidence=context.confidence,
-                map_data=map_obj if map_obj else None
-            )
+        Returns:
+            Contexto actualizado con la respuesta
+        """
+
+        try:              
+            # 1. Procesar con agente de conocimiento
+            if knowledge_agent := self.get_agent(AgentType.KNOWLEDGE):
+                context = await knowledge_agent.process(context)
+                
+            # 2. Generar respuesta con LLM usando el conocimiento
+            if llm_agent := self.get_agent(AgentType.LLM):
+                context = await llm_agent.process(context)
+                
+            # 3. Extraer ubicaciones de la respuesta generada
+            if location_agent := self.get_agent(AgentType.LOCATION):
+                context = await location_agent.process(context)
+                
+            # 4. Obtener información del clima para las ubicaciones encontradas
+            if context.locations and (weather_agent := self.get_agent(AgentType.WEATHER)):
+                context = await weather_agent.process(context)
+                
+            # 5. Actualizar UI
+            if ui_agent := self.get_agent(AgentType.UI):
+                context = await ui_agent.process(context)
+                
+            return context
             
         except Exception as e:
-            self.logger.error(f"Error coordinating response: {str(e)}", exc_info=True)
-            return TourGuideResponse(
-                answer="Lo siento, ocurrió un error procesando tu consulta. Por favor, inténtalo de nuevo.",
-                sources=[],
-                confidence=0.1
-            )
-    
-    async def _process_impl(self, context: AgentContext) -> AgentContext:
+            error_msg = f"Error processing query: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            self.set_error(context, error_msg)
+            return context
+            
+    async def get_response(self, query: str) -> AgentContext:
         """
-        Implementación del proceso para mantener compatibilidad con IAgent.
-        En este caso, simplemente pasa el contexto a través de todos los agentes.
+        Procesa una consulta y retorna el contexto con la respuesta.
+        
+        Args:
+            query: Consulta del usuario
+            
+        Returns:
+            Contexto con la respuesta y toda la información recopilada
         """
-        for agent in self.agents.values():
-            context = await agent.process(context)
-        return context
+        context = AgentContext(query=query)
+        return await self.process(context)
