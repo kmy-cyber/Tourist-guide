@@ -1,121 +1,106 @@
 """
-Agente especializado en generación de lenguaje natural.
+Agente especializado en interacción con modelos de lenguaje.
 """
-from typing import Optional
+from typing import Dict, Any, Optional
 from .base_agent import BaseAgent
-from .interfaces import ILLMAgent, AgentContext
-import os
-from openai import AsyncOpenAI
-from dotenv import load_dotenv
-
-load_dotenv()
+from .interfaces import ILLMAgent, AgentContext, AgentType
+from ..llm import LLM
 
 class LLMAgent(BaseAgent, ILLMAgent):
-    """Agente que maneja la generación de lenguaje natural"""
+    """Agente que maneja la generación de respuestas con LLM"""
     
     def __init__(self):
         """Inicializa el agente LLM"""
-        super().__init__()
-        self.client = AsyncOpenAI(
-            api_key=os.getenv("FIREWORKS_API_KEY"),
-            base_url="https://api.fireworks.ai/inference/v1"
-        )
-        self.model = "accounts/fireworks/models/llama-v3p1-8b-instruct"
+        super().__init__(AgentType.LLM)
+        self.llm = LLM()
         
-        self._system_template = """
-        Eres un guía turístico experto en Cuba, especializado en proporcionar información precisa y útil 
-        sobre destinos, atracciones y actividades turísticas. Debes:
-        
-        1. Usar la información proporcionada como fuente principal
-        2. Si hay datos del clima, integrarlos en tus recomendaciones
-        3. Mantener un tono profesional pero amigable
-        4. Proporcionar respuestas estructuradas y fáciles de leer
-        5. Si no tienes información suficiente, indicarlo claramente
+    async def process(self, context: AgentContext) -> AgentContext:
         """
-    
-    async def generate_response(self, system_prompt: str, user_prompt: str) -> str:
+        Procesa el contexto para generar una respuesta.
+        
+        Args:
+            context: Contexto actual
+            
+        Returns:
+            Contexto actualizado con la respuesta generada
+        """
+        try:
+            # Construir prompt del sistema
+            system_prompt = self.build_system_prompt(context)
+            
+            # Generar respuesta
+            response = await self.generate_response(
+                system_prompt=system_prompt,
+                user_prompt=context.query,
+                context=context.metadata
+            )
+            
+            context.response = response
+            self.update_context_confidence(context, 0.8 if response else 0.3)
+            return context
+            
+        except Exception as e:
+            self.set_error(context, f"Error generating response: {str(e)}")
+            return context
+            
+    def build_system_prompt(self, context: AgentContext) -> str:
+        """
+        Construye el prompt del sistema con toda la información disponible.
+        
+        Args:
+            context: Contexto actual
+            
+        Returns:
+            Prompt del sistema formateado
+        """
+        prompt_parts = [
+            "Eres un guía turístico experto en Cuba.",
+            "Usa la siguiente información verificada como referencia:"
+        ]
+        
+        # Añadir información de conocimiento
+        if knowledge := context.metadata.get("knowledge"):
+            prompt_parts.append("\nInformación disponible:")
+            for info in knowledge:
+                if isinstance(info, dict):
+                    data = info.get("data", {})
+                    prompt_parts.append(f"""
+- {data.get('name', 'Lugar')} ({data.get('type', 'atracción')}):
+  {data.get('description', 'No hay descripción disponible')}
+""")
+        
+        # Añadir información del clima
+        if context.weather_info:
+            prompt_parts.append("\nInformación del clima:")
+            for city, weather in context.weather_info.items():
+                prompt_parts.append(f"\n- {city}: {weather.get('report', '')}")
+        
+        # Añadir instrucciones específicas
+        prompt_parts.extend([
+            "\nInstrucciones:",
+            "1. Proporciona información precisa y relevante",
+            "2. Incluye el clima en tus recomendaciones si está disponible",
+            "3. Menciona lugares específicos cuando sea posible",
+            "4. Mantén un tono amigable y profesional"
+        ])
+        
+        return "\n".join(prompt_parts)
+        
+    async def generate_response(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        context: Optional[Dict[str, Any]] = None
+    ) -> str:
         """
         Genera una respuesta usando el modelo de lenguaje.
-        """
-        messages = [
-            {
-                "role": "system", 
-                "content": f"{self._system_template}\n\n{system_prompt}"
-            },
-            {
-                "role": "user",
-                "content": user_prompt
-            }
-        ]
-
-        try:
-            completion = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=1000,
-                temperature=0.7,
-                stop=None
-            )
-
-            if not completion.choices:
-                raise Exception("No response generated")
-
-            return completion.choices[0].message.content.strip()
+        
+        Args:
+            system_prompt: Prompt del sistema
+            user_prompt: Prompt del usuario
+            context: Contexto adicional
             
-        except Exception as e:
-            self.logger.error(f"Error in LLM generation: {str(e)}")
-            raise
-    
-    def _build_prompt(self, context: AgentContext) -> tuple[str, str]:
+        Returns:
+            Respuesta generada
         """
-        Construye los prompts del sistema y usuario.
-        """
-        # Obtener información del conocimiento
-        knowledge_results = context.metadata.get('knowledge_results', [])
-        knowledge_context = []
-        
-        for result in knowledge_results:
-            data = result.get('data', {})
-            source_info = data.get('source_info', {})
-            location = data.get('location', {})
-            
-            knowledge_context.append(f"""
-Información sobre {data.get('name', 'lugar de interés')} ({data.get('type', 'atracción')}):
-Ubicación: {location.get('address', 'No especificada')}
-Descripción: {data.get('description', 'No disponible')}
-Fuente: {source_info.get('type', 'No especificada')} (Confiabilidad: {source_info.get('reliability', 'unknown')})
----""")
-        
-        knowledge_text = "\n".join(knowledge_context) if knowledge_context else \
-            "No se encontró información específica sobre tu consulta. Proporcionaré una respuesta general."
-        
-        # Añadir información del clima si está disponible
-        weather_info = context.metadata.get('weather_info', '')
-        
-        system_prompt = f"""Eres un guía turístico experto en Cuba. 
-Usa la siguiente información verificada como referencia:
-
-{knowledge_text}
-
-{weather_info if weather_info else ''}
-
-Si hay información del clima disponible, inclúyela en tus recomendaciones y sugerencias."""
-        
-        return system_prompt, context.query
-    
-    async def _process_impl(self, context: AgentContext) -> AgentContext:
-        """
-        Procesa el contexto generando una respuesta natural.
-        """
-        system_prompt, user_prompt = self._build_prompt(context)
-        
-        try:
-            response = await self.generate_response(system_prompt, user_prompt)
-            context.metadata['llm_response'] = response
-        except Exception as e:
-            self.logger.error(f"Error generating response: {str(e)}")
-            context.metadata['llm_response'] = """Lo siento, estoy teniendo problemas para generar una respuesta.
-Por favor, intenta tu consulta de nuevo."""
-            context.confidence = 0.1
-        
-        return context
+        return await self.llm.generate_response(system_prompt, user_prompt)
