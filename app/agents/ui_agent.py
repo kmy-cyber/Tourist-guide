@@ -2,10 +2,14 @@
 Agente especializado en la interfaz de usuario.
 Maneja la presentación de información, mapas y clima.
 """
+import logging
 from typing import Dict, List, Any, Optional
+from app.weather.weather import WeatherInfo
 import folium
 from .interfaces import IUIAgent, AgentContext, AgentType
 from .base_agent import BaseAgent
+
+logger = logging.getLogger(__name__)
 
 class UIAgent(BaseAgent, IUIAgent):
     """
@@ -136,19 +140,52 @@ class UIAgent(BaseAgent, IUIAgent):
         </div>
         """
         
-    async def show_weather(self, weather_info: Dict[str, Any]) -> Optional[str]:
+    async def show_weather(self, weather_info: Dict[str, WeatherInfo]) -> Optional[str]:
+        """
+        Muestra información del clima formateada para múltiples ubicaciones.
+        
+        Args:
+            weather_info: Diccionario con información del clima por ciudad
+        Returns:
+            str: HTML formateado con la información del clima o None si no hay datos
+        """
+        if not weather_info:
+            return None
+        
+        logger.info(f"Mostrando información del clima para {len(weather_info)} ubicaciones")
+        weather_html = ""
+        
+        for city, info in weather_info.items():
+            city_html = await self.show_weather_info(info)
+            if city_html:
+                weather_html += f"<div style='margin-bottom: 1rem;'>{city_html}</div>"
+        
+        if not weather_html:
+            return None
+        
+        return f"""
+        <div>
+            {weather_html}
+        </div>
+        """
+
+    
+    async def show_weather_info(self, weather_info: WeatherInfo) -> Optional[str]:
         """
         Muestra información del clima formateada.
         """
         if not weather_info:
             return None
-            
-        ciudad = weather_info.get("ciudad", "")
-        descripcion = weather_info.get("descripcion", "")
-        temperatura = weather_info.get("temperatura", "")
-        humedad = weather_info.get("humedad", "")
-        viento = weather_info.get("viento", "")
-          # Get weather emoji based on description
+        
+        logger.info(f"Mostrando información del clima para {weather_info}")
+        
+        ciudad = weather_info.city
+        descripcion = weather_info.description
+        temperatura = weather_info.current_temp
+        humedad = weather_info.humidity
+        viento = weather_info.wind_speed
+
+        # Get weather emoji based on description
         weather_emoji = "🌤️"  # default
         if descripcion:
             desc_lower = descripcion.lower()

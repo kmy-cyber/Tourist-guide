@@ -3,6 +3,8 @@ Agente especializado en el manejo de ubicaciones y geocodificación.
 """
 from typing import Dict, List, Optional, Any
 import re
+import json
+import asyncio
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from .interfaces import ILocationAgent, AgentContext, AgentType
@@ -18,19 +20,22 @@ class LocationAgent(BaseAgent, ILocationAgent):
         super().__init__(AgentType.LOCATION)
         self._geolocator = None
         self._location_cache: Dict[str, Dict[str, float]] = {}
+        self.coordinator = None  # Referencia al coordinador para acceder a otros agentes
         
-        # Patrones para extraer ubicaciones
+        # Patrones mejorados para extraer ubicaciones como fallback
         self._location_patterns = [
-            (r"(?:ciudad de |municipio de |la ciudad |el municipio )?(?P<ciudad>La Habana|Santiago de Cuba|Camagüey|Holguín|Santa Clara|Bayamo|Cienfuegos|Pinar del Río|Matanzas|Ciego de Ávila|Las Tunas|Sancti Spíritus|Guantánamo|Artemisa|Mayabeque)", "ciudad"),
-            (r"(?:museo|Museo) (?:de )?(?P<museo>[A-ZÁ-Úa-zá-ú\s]+?)(?=[\.,]|\s(?:es|está|se|que|y|o|en|con))", "museo"),
-            (r"(?:playa|Playa) (?:de )?(?P<playa>[A-ZÁ-Úa-zá-ú\s]+?)(?=[\.,]|\s(?:es|está|se|que|y|o|en|con))", "playa"),
-            (r"(?:hotel|Hotel) (?P<hotel>[A-ZÁ-Úa-zá-ú\s]+?)(?=[\.,]|\s(?:es|está|se|que|y|o|en|con))", "hotel"),
-            (r"(?:monumento|Monumento|fortaleza|Fortaleza|castillo|Castillo) (?:de )?(?P<monumento>[A-ZÁ-Úa-zá-ú\s]+?)(?=[\.,]|\s(?:es|está|se|que|y|o|en|con))", "monumento")
+            (r"(?i)(?:ciudad de |municipio de |la ciudad |el municipio )?(?P<ciudad>La Habana|Habana|Santiago de Cuba|Camagüey|Holguín|Santa Clara|Bayamo|Cienfuegos|Pinar del Río|Matanzas|Ciego de Ávila|Las Tunas|Sancti Spíritus|Guantánamo|Artemisa|Mayabeque|Trinidad|Varadero|Viñales)", "ciudad"),
+            (r"(?i)(?:museo|Museo) (?:de |del |la )?(?P<museo>[A-ZÁ-Úa-zá-ú\s]+?)(?=[\.,]|\s(?:es|está|se|que|y|o|en|con|ubicado|situado))", "museo"),
+            (r"(?i)(?:playa|Playa) (?:de |del |la )?(?P<playa>[A-ZÁ-Úa-zá-ú\s]+?)(?=[\.,]|\s(?:es|está|se|que|y|o|en|con|ubicada|situada))", "playa"),
+            (r"(?i)(?:hotel|Hotel) (?P<hotel>[A-ZÁ-Úa-zá-ú\s]+?)(?=[\.,]|\s(?:es|está|se|que|y|o|en|con|ubicado|situado))", "hotel"),
+            (r"(?i)(?:monumento|Monumento|fortaleza|Fortaleza|castillo|Castillo|catedral|Catedral|iglesia|Iglesia) (?:de |del |la )?(?P<monumento>[A-ZÁ-Úa-zá-ú\s]+?)(?=[\.,]|\s(?:es|está|se|que|y|o|en|con|ubicado|situado))", "monumento"),
+            (r"(?i)(?:parque|Parque) (?:Nacional |nacional )?(?:de |del |la )?(?P<parque>[A-ZÁ-Úa-zá-ú\s]+?)(?=[\.,]|\s(?:es|está|se|que|y|o|en|con|ubicado|situado))", "parque")
         ]
         
-        # Coordenadas conocidas como fallback
+        # Coordenadas conocidas para lugares principales de Cuba
         self._known_coordinates = {
             "La Habana": {"lat": 23.1136, "lon": -82.3666},
+            "Habana": {"lat": 23.1136, "lon": -82.3666},
             "Santiago de Cuba": {"lat": 20.0217, "lon": -75.8283},
             "Camagüey": {"lat": 21.3808, "lon": -77.9169},
             "Holguín": {"lat": 20.8872, "lon": -76.2631},
@@ -44,101 +49,75 @@ class LocationAgent(BaseAgent, ILocationAgent):
             "Sancti Spíritus": {"lat": 21.9269, "lon": -79.4425},
             "Guantánamo": {"lat": 20.1453, "lon": -75.2061},
             "Artemisa": {"lat": 22.8164, "lon": -82.7597},
-            "Mayabeque": {"lat": 22.9615, "lon": -82.1513}
+            "Mayabeque": {"lat": 22.9615, "lon": -82.1513},
+            "Trinidad": {"lat": 21.8019, "lon": -79.9847},
+            "Varadero": {"lat": 23.1542, "lon": -81.2537},
+            "Viñales": {"lat": 22.6167, "lon": -83.7083}
         }
+        
+    def set_coordinator(self, coordinator):
+        """Establece la referencia al coordinador"""
+        self.coordinator = coordinator
         
     async def initialize(self) -> None:
         """Inicializa el geocodificador"""
-        self._geolocator = Nominatim(user_agent="cuba_tourism_guide")
-        # Precarga las coordenadas conocidas en el caché
-        self._location_cache.update(self._known_coordinates)
+        try:
+            self._geolocator = Nominatim(
+                user_agent="cuba_tourism_guide_v2",
+                timeout=10
+            )
+            # Precarga las coordenadas conocidas en el caché
+            self._location_cache.update(self._known_coordinates)
+            self.logger.info("LocationAgent initialized with geocoder and coordinate cache")
+            self.logger.info(f"Preloaded {len(self._location_cache)} known coordinates")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize geolocator: {str(e)}")
+            self.logger.info("Will use coordinate cache only")
+            # Aún podemos usar las coordenadas conocidas
+            self._location_cache.update(self._known_coordinates)
         
     async def process(self, context: AgentContext) -> AgentContext:
         """
         Procesa el contexto para extraer y geocodificar ubicaciones.
         """
         try:
-            locations = []
+            # Usamos la respuesta generada por el LLM como fuente principal
             text_to_analyze = context.response or context.query
             
-            # Primero intentamos extraer con LLM para mayor precisión
-            llm_locations = await self.extract_locations_with_llm(text_to_analyze)
-            if llm_locations:
-                locations.extend(llm_locations)
+            if not text_to_analyze.strip():
+                self.logger.warning("No text available for location extraction")
+                return context
                 
-            # Como fallback, usamos extracción basada en patrones
-            if not locations:
-                pattern_locations = await self.extract_locations(text_to_analyze)
-                locations.extend(pattern_locations)
+            self.logger.info(f"Extracting locations from: {text_to_analyze[:100]}...")
             
-            # Geocodificar las ubicaciones encontradas
+            # 1. Extracción principal con LLM (más precisa)
+            locations = await self.extract_locations_with_llm(text_to_analyze)
+            
+            # 2. Fallback: extracción con patrones si LLM no encuentra nada
+            if not locations:
+                self.logger.info("LLM extraction failed, using pattern-based fallback")
+                locations = await self.extract_locations(text_to_analyze)
+            
+            # 3. Geocodificar todas las ubicaciones encontradas
             geocoded_locations = []
-            for location in locations:
-                # Intentar obtener coordenadas primero del cache/conocidas
-                if coords := await self.get_coordinates(location["name"]):
-                    location.update(coords)
-                    geocoded_locations.append(location)
-                    
-            # Actualizar contexto solo con ubicaciones que tienen coordenadas
+            if locations:
+                geocoded_locations = await self.geocode_locations(locations)
+            
+            # 4. Actualizar contexto
             context.locations = geocoded_locations
-            self.update_context_confidence(context, 0.9 if geocoded_locations else 0.5)
+            
+            # Calcular confianza basada en el éxito de la geocodificación
+            confidence = 0.9 if geocoded_locations else (0.6 if locations else 0.3)
+            self.update_context_confidence(context, confidence)
+            
+            self.logger.info(f"Found {len(geocoded_locations)} geocoded locations")
             return context
             
         except Exception as e:
-            self.set_error(context, f"Error processing locations: {str(e)}")
+            error_msg = f"Error processing locations: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            self.set_error(context, error_msg)
             return context
-            
-    async def extract_locations(self, text: str) -> List[Dict[str, Any]]:
-        """
-        Extrae ubicaciones mencionadas en un texto.
-        """
-        locations = []
-        seen = set()
-        
-        for pattern, location_type in self._location_patterns:
-            matches = re.finditer(pattern, text, re.MULTILINE)
-            for match in matches:
-                for group_name, value in match.groupdict().items():
-                    if value and value.strip() and value not in seen:
-                        locations.append({
-                            "name": value.strip(),
-                            "type": location_type
-                        })
-                        seen.add(value)
-        
-        return locations
-        
-    async def get_coordinates(self, location: str) -> Optional[Dict[str, float]]:
-        """
-        Obtiene coordenadas para una ubicación usando caché o geocodificación.
-        """
-        # Revisar caché
-        if location in self._location_cache:
-            return self._location_cache[location]
-            
-        if not self._geolocator:
-            return None
-            
-        try:
-            # Geocodificar con contexto de Cuba
-            result = self._geolocator.geocode(
-                f"{location}, Cuba",
-                timeout=10,
-                exactly_one=True
-            )
-            
-            if result:
-                coords = {
-                    "lat": result.latitude,
-                    "lon": result.longitude
-                }
-                self._location_cache[location] = coords
-                return coords
-                
-        except (GeocoderTimedOut, GeocoderUnavailable) as e:
-            self.logger.warning(f"Geocoding failed for {location}: {str(e)}")
-            
-        return None
     
     async def extract_locations_with_llm(self, text: str) -> List[Dict[str, Any]]:
         """
@@ -150,43 +129,150 @@ class LocationAgent(BaseAgent, ILocationAgent):
         Returns:
             Lista de ubicaciones extraídas con su tipo
         """
-        system_prompt = """
-        Eres un experto en identificar y extraer nombres de lugares en Cuba.
-        Analiza el texto y extrae todas las ubicaciones mencionadas, clasificándolas por tipo.
-        Formatea la respuesta como una lista JSON donde cada elemento tiene:
-        - name: Nombre completo del lugar
-        - type: Tipo de lugar (ciudad, museo, playa, hotel, monumento, lugar)
-        Solo incluye lugares que estés seguro que existen en Cuba.
-        """
-        
-        try:
-            # Obtenemos agente LLM del coordinador
-            llm_agent = await self.get_llm_agent()
-            if not llm_agent:
-                return []
-                
-            # Generamos respuesta con el LLM
-            locations_text = await llm_agent.generate_response(
-                system_prompt=system_prompt,
-                user_prompt=text
-            )
+        if not self.coordinator:
+            self.logger.warning("No coordinator available for LLM extraction")
+            return []
             
-            # Intentamos parsear la respuesta como JSON
-            try:
-                import json
-                locations = json.loads(locations_text)
-                if isinstance(locations, list):
-                    return locations
-            except:
-                self.logger.warning("No se pudo parsear la respuesta del LLM como JSON")
-                return []
+        llm_agent = self.coordinator.get_agent(AgentType.LLM)
+        if not llm_agent:
+            self.logger.warning("No LLM agent available for location extraction")
+            return []
+    
+    async def extract_locations(self, text: str) -> List[Dict[str, Any]]:
+        """
+        Extrae ubicaciones usando patrones de regex como fallback.
+        
+        Args:
+            text: Texto de donde extraer ubicaciones
+            
+        Returns:
+            Lista de ubicaciones extraídas
+        """
+        locations = []
+        seen = set()
+        
+        for pattern, location_type in self._location_patterns:
+            matches = re.finditer(pattern, text, re.MULTILINE | re.IGNORECASE)
+            for match in matches:
+                for group_name, value in match.groupdict().items():
+                    if value and value.strip():
+                        name = value.strip()
+                        # Evitar duplicados y nombres muy cortos
+                        if name not in seen and len(name) > 2:
+                            locations.append({
+                                "name": name,
+                                "type": location_type
+                            })
+                            seen.add(name)
+        
+        self.logger.info(f"Pattern extraction found {len(locations)} locations")
+        return locations
+    
+    async def geocode_locations(self, locations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Geocodifica una lista de ubicaciones de manera eficiente.
+        
+        Args:
+            locations: Lista de ubicaciones a geocodificar
+            
+        Returns:
+            Lista de ubicaciones con coordenadas
+        """
+        geocoded_locations = []
+        
+        # Procesar ubicaciones en lotes para mejorar eficiencia
+        for location in locations:
+            coords = await self.get_coordinates(location["name"])
+            if coords:
+                location.update(coords)
+                geocoded_locations.append(location)
+                self.logger.info(f"Geocoded: {location['name']} -> {coords}")
+            else:
+                self.logger.warning(f"Failed to geocode: {location['name']}")
+                
+        return geocoded_locations
+        
+    async def get_coordinates(self, location: str) -> Optional[Dict[str, float]]:
+        """
+        Obtiene coordenadas para una ubicación usando caché o geocodificación.
+        """
+        # Normalizar nombre para el caché
+        location_key = location.strip()
+        
+        # 1. Revisar caché primero (incluye coordenadas conocidas)
+        if location_key in self._location_cache:
+            self.logger.debug(f"Cache hit for: {location_key}")
+            return self._location_cache[location_key]
+            
+        # También buscar variaciones comunes del nombre
+        location_variants = [
+            location_key,
+            location_key.replace("La Habana", "Habana"),
+            location_key.replace("Habana", "La Habana")
+        ]
+        
+        for variant in location_variants:
+            if variant in self._location_cache:
+                self.logger.debug(f"Cache hit for variant '{variant}' of '{location_key}'")
+                coords = self._location_cache[variant]
+                # Guardar también la variante original
+                self._location_cache[location_key] = coords
+                return coords
+        
+        # 2. Si no hay geocodificador, intentar con coordenadas conocidas
+        if not self._geolocator:
+            self.logger.warning(f"No geolocator available for: {location_key}")
+            # Intentar busqueda fuzzy en coordenadas conocidas
+            for known_location, coords in self._known_coordinates.items():
+                if (known_location.lower() in location_key.lower() or 
+                    location_key.lower() in known_location.lower()):
+                    self.logger.info(f"Fuzzy match: '{location_key}' -> '{known_location}'")
+                    self._location_cache[location_key] = coords
+                    return coords
+            return None
+            
+        try:
+            # 3. Intentar geocodificación con diferentes variantes
+            search_queries = [
+                f"{location_key}, Cuba",
+                f"{location_key}, La Habana, Cuba" if "Habana" not in location_key else f"{location_key}, Cuba",
+                location_key
+            ]
+            
+            for query in search_queries:
+                try:
+                    self.logger.debug(f"Geocoding query: {query}")
+                    result = self._geolocator.geocode(
+                        query,
+                        timeout=15,
+                        exactly_one=True,
+                        country_codes=['cu']  # Limitar a Cuba
+                    )
+                    
+                    if result:
+                        coords = {
+                            "lat": round(result.latitude, 6),
+                            "lon": round(result.longitude, 6)
+                        }
+                        
+                        # Verificar que las coordenadas están en Cuba (aproximadamente)
+                        if (19.0 <= coords["lat"] <= 24.0 and 
+                            -85.0 <= coords["lon"] <= -74.0):
+                            
+                            self._location_cache[location_key] = coords
+                            self.logger.info(f"Successfully geocoded: {location_key}")
+                            return coords
+                        else:
+                            self.logger.warning(f"Coordinates outside Cuba for {location_key}: {coords}")
+                            
+                except (GeocoderTimedOut, GeocoderUnavailable) as e:
+                    self.logger.debug(f"Geocoding timeout/unavailable for query '{query}': {str(e)}")
+                    continue
+                    
+                # Pequeña pausa entre consultas para evitar rate limiting
+                await asyncio.sleep(0.5)
                 
         except Exception as e:
-            self.logger.error(f"Error extrayendo ubicaciones con LLM: {str(e)}")
-            return []
-        
-    async def get_llm_agent(self) -> Optional['ILLMAgent']:
-        """Gets the LLM agent from the coordinator if available"""
-        if not hasattr(self, 'coordinator'):
-            return None
-        return self.coordinator.get_agent(AgentType.LLM)
+            self.logger.error(f"Unexpected error geocoding {location_key}: {str(e)}")
+            
+        return None
