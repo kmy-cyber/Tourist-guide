@@ -12,7 +12,7 @@ class WeatherService:
         self.weather_agent = WeatherAgent()
         self.logger = logging.getLogger(__name__)
 
-    def get_weather_report(self, city: str) -> Optional[str]:
+    def get_weather_report(self, city: str) -> Optional[WeatherInfo]:
         """
         Obtiene un reporte del clima formateado para una ciudad
         
@@ -33,13 +33,13 @@ class WeatherService:
                 
             self.logger.info(f"Reporte del clima generado exitosamente para {city}")
             # Generar resumen amigable
-            return self.weather_agent.generate_weather_summary(weather_info)
+            return weather_info
             
         except Exception as e:
             self.logger.error(f"Error obteniendo el reporte del clima para {city}: {e}")
             return None
 
-    async def get_weather_async(self, city: str) -> Optional[str]:
+    async def get_weather_async(self, city: str) -> Optional[WeatherInfo]:
         """Versión asíncrona del reporte del clima"""
         self.logger.info(f"[Async] Solicitando reporte del clima para ciudad: {city}")
         return self.get_weather_report(city)

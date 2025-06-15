@@ -2,6 +2,8 @@
 Agente especializado en obtener y procesar información del clima.
 """
 from typing import Optional, Dict, Any
+
+from app.weather.weather import WeatherInfo
 from .base_agent import BaseAgent
 from .interfaces import IWeatherAgent, AgentContext, AgentType
 from ..weather.weather_service import WeatherService
@@ -41,7 +43,7 @@ class WeatherAgent(BaseAgent, IWeatherAgent):
             self.set_error(context, f"Error getting weather: {str(e)}")
             return context
             
-    async def get_weather(self, location: str) -> Optional[Dict[str, Any]]:
+    async def get_weather(self, location: str) -> Optional[WeatherInfo]:
         """
         Obtiene información del clima para una ubicación.
         
@@ -53,10 +55,7 @@ class WeatherAgent(BaseAgent, IWeatherAgent):
         """
         try:
             if weather_report := await self.weather_service.get_weather_async(location):
-                return {
-                    "ciudad": location,
-                    "report": weather_report
-                }
+                return weather_report
         except Exception as e:
             self.logger.warning(f"Error getting weather for {location}: {str(e)}")
             
