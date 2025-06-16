@@ -366,3 +366,118 @@ class PlannerAgent(BaseAgent, IPlannerAgent):
 """
         
         return (original_response or "") + itinerary_text
+    
+    async def _get_available_activities(self, context: AgentContext) -> List[TourismActivity]:
+        """
+        Obtiene actividades disponibles del agente de conocimiento.
+        
+        Args:
+            context: Contexto con la información de la consulta
+            
+        Returns:
+            Lista de actividades turísticas disponibles
+        """
+        try:
+            # Obtener conocimiento relevante del contexto
+            knowledge_items = context.metadata.get("knowledge", [])
+            
+            if not knowledge_items:
+                self.logger.warning("No hay conocimiento disponible para generar actividades")
+                return []
+                
+            activities = []
+            
+            # Convertir cada item de conocimiento en una actividad turística
+            for item in knowledge_items:
+                # Extraer información relevante
+                name = item.get("title", "")
+                description = item.get("content", "")
+                location_data = item.get("location", {})
+                rating = float(item.get("rating", 4.0))  # Rating por defecto 4.0
+                
+                # Crear objeto Location si hay datos de ubicación
+                location = None
+                if location_data:
+                    location = Location(
+                        name=location_data.get("name", ""),
+                        latitude=location_data.get("latitude", 0.0),
+                        longitude=location_data.get("longitude", 0.0)
+                    )
+                
+                # Determinar tipo de actividad basado en categorías o tags
+                activity_type = self._determine_activity_type(item)
+                
+                # Estimar duración y costo basado en tipo de actividad
+                duration = self._estimate_duration(activity_type)
+                cost = self._estimate_cost(activity_type)
+                
+                # Crear actividad turística
+                activity = TourismActivity(
+                    name=name,
+                    description=description,
+                    location=location,
+                    activity_type=activity_type,
+                    duration=duration,
+                    cost=cost,
+                    rating=rating
+                )
+                
+                activities.append(activity)
+            
+            return activities
+            
+        except Exception as e:
+            self.logger.error(f"Error obteniendo actividades: {str(e)}")
+            return []
+            
+    def _determine_activity_type(self, item: Dict[str, Any]) -> ActivityType:
+        """Determina el tipo de actividad basado en la información disponible"""
+        # Convertir categorías o tags a lowercase para comparación
+        categories = [cat.lower() for cat in item.get("categories", [])]
+        tags = [tag.lower() for tag in item.get("tags", [])]
+        title = item.get("title", "").lower()
+        content = item.get("content", "").lower()
+        
+        # Patrones para cada tipo de actividad
+        activity_patterns = {
+            ActivityType.CULTURAL: ["museo", "teatro", "galería", "cultura", "historia", "arte"],
+            ActivityType.NATURE: ["playa", "parque", "naturaleza", "jardín", "montaña"],
+            ActivityType.GASTRONOMY: ["restaurante", "café", "bar", "comida", "cocina"],
+            ActivityType.ENTERTAINMENT: ["show", "espectáculo", "concierto", "música", "baile"],
+            ActivityType.SHOPPING: ["tienda", "mercado", "shopping", "artesanía"],
+            ActivityType.SIGHTSEEING: ["monumento", "plaza", "catedral", "iglesia", "arquitectura"]
+        }
+        
+        # Buscar coincidencias en categorías, tags y contenido
+        for activity_type, patterns in activity_patterns.items():
+            if any(pattern in categories + tags for pattern in patterns):
+                return activity_type
+            if any(pattern in title or pattern in content for pattern in patterns):
+                return activity_type
+        
+        # Si no hay coincidencias, retornar SIGHTSEEING por defecto
+        return ActivityType.SIGHTSEEING
+        
+    def _estimate_duration(self, activity_type: ActivityType) -> timedelta:
+        """Estima la duración típica para cada tipo de actividad"""
+        durations = {
+            ActivityType.CULTURAL: timedelta(hours=2),
+            ActivityType.NATURE: timedelta(hours=3),
+            ActivityType.GASTRONOMY: timedelta(hours=1, minutes=30),
+            ActivityType.ENTERTAINMENT: timedelta(hours=2),
+            ActivityType.SHOPPING: timedelta(hours=1),
+            ActivityType.SIGHTSEEING: timedelta(hours=1)
+        }
+        return durations.get(activity_type, timedelta(hours=1))
+        
+    def _estimate_cost(self, activity_type: ActivityType) -> float:
+        """Estima el costo típico para cada tipo de actividad"""
+        costs = {
+            ActivityType.CULTURAL: 15.0,  # Museos, galerías
+            ActivityType.NATURE: 10.0,    # Parques, playas
+            ActivityType.GASTRONOMY: 25.0, # Restaurantes
+            ActivityType.ENTERTAINMENT: 35.0, # Shows, conciertos
+            ActivityType.SHOPPING: 0.0,    # Sin costo de entrada
+            ActivityType.SIGHTSEEING: 5.0  # Monumentos, plazas
+        }
+        return costs.get(activity_type, 10.0)

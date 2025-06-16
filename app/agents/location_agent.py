@@ -93,17 +93,12 @@ class LocationAgent(BaseAgent, ILocationAgent):
             # 1. Extracción principal con LLM (más precisa)
             locations = await self.extract_locations_with_llm(text_to_analyze)
             
-            # 2. Fallback: extracción con patrones si LLM no encuentra nada
-            if not locations:
-                self.logger.info("LLM extraction failed, using pattern-based fallback")
-                locations = await self.extract_locations(text_to_analyze)
-            
-            # 3. Geocodificar todas las ubicaciones encontradas
+            # 2. Geocodificar todas las ubicaciones encontradas
             geocoded_locations = []
             if locations:
                 geocoded_locations = await self.geocode_locations(locations)
             
-            # 4. Actualizar contexto
+            # 3. Actualizar contexto
             context.locations = geocoded_locations
             
             # Calcular confianza basada en el éxito de la geocodificación
@@ -137,6 +132,62 @@ class LocationAgent(BaseAgent, ILocationAgent):
         if not llm_agent:
             self.logger.warning("No LLM agent available for location extraction")
             return []
+
+        try:
+            # Construir un prompt específico para extracción de ubicaciones
+            system_prompt = """Eres un asistente experto en identificar ubicaciones en Cuba.
+Tu tarea es extraer todas las ubicaciones mencionadas en el texto y clasificarlas por tipo.
+Devuelve solo un array JSON con el siguiente formato para cada ubicación encontrada:
+[{"name": "nombre de la ubicación", "type": "tipo de ubicación"}]
+
+Los tipos de ubicación pueden ser:
+- ciudad: ciudades y municipios
+- playa: playas y balnearios
+- museo: museos y galerías
+- hotel: hoteles y alojamientos
+- monumento: monumentos históricos, fortalezas, castillos, iglesias
+- parque: parques naturales o urbanos
+- otro: otros lugares de interés
+
+Solo incluye ubicaciones que existen en Cuba y asegúrate de que el nombre sea específico.
+Si el texto no menciona ninguna ubicación, devuelve un array vacío []."""
+
+            # Generar respuesta con el LLM
+            response = await llm_agent.generate_response(
+                system_prompt=system_prompt,
+                user_prompt=text
+            )
+
+            # Intentar parsear la respuesta JSON
+            try:
+                if response.strip().startswith('[') and response.strip().endswith(']'):
+                    locations = json.loads(response)
+                    if isinstance(locations, list):
+                        # Filtrar y validar cada ubicación
+                        validated_locations = []
+                        for loc in locations:
+                            if isinstance(loc, dict) and 'name' in loc and 'type' in loc:
+                                name = loc['name'].strip()
+                                if len(name) > 2:  # Evitar nombres muy cortos
+                                    validated_locations.append({
+                                        'name': name,
+                                        'type': loc['type'].lower()
+                                    })
+                        
+                        self.logger.info(f"LLM extraction found {len(validated_locations)} locations")
+                        return validated_locations
+            except json.JSONDecodeError as e:
+                self.logger.error(f"Error parsing LLM response as JSON: {str(e)}")
+            except Exception as e:
+                self.logger.error(f"Error processing LLM response: {str(e)}")
+
+            # Si algo falla, usar extracción por patrones como fallback
+            self.logger.info("Falling back to pattern-based extraction")
+            return await self.extract_locations(text)
+
+        except Exception as e:
+            self.logger.error(f"Error in LLM location extraction: {str(e)}")
+            return await self.extract_locations(text)
     
     async def extract_locations(self, text: str) -> List[Dict[str, Any]]:
         """
