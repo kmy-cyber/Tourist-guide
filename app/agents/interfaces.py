@@ -15,7 +15,9 @@ class AgentType(Enum):
     LOCATION = auto()
     LLM = auto()
     UI = auto()
-
+    PLANNER = auto()
+    USER = auto()
+        
 @dataclass
 class AgentContext:
     """
@@ -31,11 +33,16 @@ class AgentContext:
     response: Optional[str] = None
     error: Optional[str] = None
 
+    user_preferences: Dict[str, Any] = None
+    itinerary: Optional[Dict[str, Any]] = None
+    planning_mode: bool = False
+
     def __post_init__(self):
         self.sources = self.sources or []
         self.metadata = self.metadata or {}
         self.locations = self.locations or []
         self.weather_info = self.weather_info or {}
+        self.user_preferences = self.user_preferences or {}
 
 class IAgent(Protocol):
     """
@@ -124,4 +131,42 @@ class IUIAgent(IAgent):
 
     async def show_weather(self, weather_info: Dict[str, Any]) -> None:
         """Muestra información del clima"""
+        ...
+
+
+class IUserAgent(IAgent):
+    """Protocolo para agentes que manejan usuarios"""
+    
+    async def get_user_context(self, user_id: str) -> Any:
+        """Obtiene el contexto del usuario"""
+        ...
+
+    async def save_interaction(self, user_id: str, query: str, response: str) -> None:
+        """Guarda una interacción del usuario"""
+        ...
+
+    async def update_user_context(self, user_id: str, context_updates: Dict[str, Any]) -> None:
+        """Actualiza el contexto del usuario"""
+        ...
+
+    async def get_user_preferences(self, user_id: str) -> Dict[str, Any]:
+        """Obtiene las preferencias del usuario"""
+        ...
+
+
+class IPlannerAgent(IAgent):
+    """Protocolo para agentes de planificación"""
+    
+    async def generate_itinerary(
+        self, 
+        context: AgentContext
+    ) -> Optional[Dict[str, Any]]:
+        """Genera un itinerario optimizado"""
+        ...
+        
+    async def update_preferences(
+        self, 
+        user_preferences: Dict[str, Any]
+    ) -> None:
+        """Actualiza preferencias del usuario"""
         ...

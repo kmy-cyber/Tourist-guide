@@ -57,6 +57,38 @@ class LLMAgent(BaseAgent, ILLMAgent):
             "Eres un guía turístico experto en Cuba.",
             "Usa la siguiente información verificada como referencia:"
         ]
+
+        if user_context := context.metadata.get("user_context"):
+            user_profile = user_context.get("profile", {})
+            user_name = user_profile.get("name")
+            
+            if user_name:
+                prompt_parts.append(f"\nEl usuario se llama {user_name}. Dirígete a él por su nombre de manera natural.")
+            
+            # Añadir intereses del usuario
+            interests = user_context.get("interests", [])
+            if interests:
+                interests_text = ", ".join(interests[:4])  # Top 4 intereses
+                prompt_parts.append(f"Sus principales intereses son: {interests_text}.")
+            
+            # Añadir ubicaciones que ha mencionado antes
+            mentioned_locations = user_context.get("mentioned_locations", [])
+            if mentioned_locations:
+                locations_text = ", ".join(mentioned_locations[-3:])  # Últimas 3
+                prompt_parts.append(f"Ha preguntado anteriormente sobre: {locations_text}.")
+            
+            # Añadir contador de interacciones
+            interaction_count = user_profile.get("interaction_count", 0)
+            if interaction_count > 1:
+                if interaction_count == 2:
+                    prompt_parts.append("Esta es su segunda consulta contigo.")
+                elif interaction_count <= 5:
+                    prompt_parts.append(f"Ya han tenido {interaction_count} conversaciones.")
+                else:
+                    prompt_parts.append("Es un usuario frecuente, personaliza más tu respuesta.")
+        
+        prompt_parts.append("\nUsa la siguiente información verificada como referencia para tu respuesta:")
+        
         
         # Añadir información de conocimiento
         if knowledge := context.metadata.get("knowledge"):
@@ -77,11 +109,14 @@ class LLMAgent(BaseAgent, ILLMAgent):
         
         # Añadir instrucciones específicas
         prompt_parts.extend([
-            "\nInstrucciones:",
-            "1. Proporciona información precisa y relevante",
+            "\n📋 INSTRUCCIONES:",
+            "1. Proporciona información precisa y relevante sobre Cuba",
             "2. Incluye el clima en tus recomendaciones si está disponible",
             "3. Menciona lugares específicos cuando sea posible",
-            "4. Mantén un tono amigable y profesional"
+            "4. Mantén un tono amigable, profesional y personalizado",
+            "5. Si el usuario dice su nombre, recuérdalo para futuras interacciones",
+            "6. Adapta tu respuesta según sus intereses y consultas anteriores",
+            "7. Si es su primera vez, dale una bienvenida especial a Cuba"
         ])
         
         return "\n".join(prompt_parts)
