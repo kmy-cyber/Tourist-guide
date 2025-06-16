@@ -2,6 +2,7 @@
 Agente coordinador que orquesta la interacción entre agentes especializados.
 """
 from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 from .base_agent import BaseAgent
 from .interfaces import (
     IAgent, ICoordinatorAgent, AgentContext, AgentType,
@@ -33,6 +34,11 @@ class CoordinatorAgent(BaseAgent, ICoordinatorAgent):
             agent: Agente a registrar
         """
         self.agents[agent.agent_type] = agent
+        
+        # Si es un agente de ubicación, establecer referencia al coordinador
+        if hasattr(agent, 'set_coordinator'):
+            agent.set_coordinator(self)
+            
         
         # Si es un agente de ubicación, establecer referencia al coordinador
         if hasattr(agent, 'set_coordinator'):
@@ -91,9 +97,23 @@ class CoordinatorAgent(BaseAgent, ICoordinatorAgent):
                 self.logger.info(f"Cleaned up agent: {agent_type.name}")
             except Exception as e:
                 self.logger.error(f"Failed to cleanup agent {agent_type.name}: {str(e)}")
+        for agent_type, agent in self.agents.items():
+            try:
+                await agent.cleanup()
+                self.logger.info(f"Cleaned up agent: {agent_type.name}")
+            except Exception as e:
+                self.logger.error(f"Failed to cleanup agent {agent_type.name}: {str(e)}")
 
     async def process(self, context: AgentContext) -> AgentContext:
         """
+        Procesa una consulta coordinando múltiples agentes en el orden optimizado.
+        
+        Flujo de procesamiento:
+        1. Buscar conocimiento relevante
+        2. Generar respuesta con LLM usando el conocimiento encontrado
+        3. Extraer ubicaciones de la respuesta generada por el LLM
+        4. Obtener información del clima para las ubicaciones encontradas
+        5. Actualizar la interfaz de usuario
         Procesa una consulta coordinando múltiples agentes en el orden optimizado.
         
         Flujo de procesamiento:
@@ -107,6 +127,7 @@ class CoordinatorAgent(BaseAgent, ICoordinatorAgent):
             context: Contexto con la consulta
             
         Returns:
+            Contexto actualizado con la respuesta y toda la información
             Contexto actualizado con la respuesta y toda la información
         """
         try:
@@ -130,6 +151,7 @@ class CoordinatorAgent(BaseAgent, ICoordinatorAgent):
             # 1. CONOCIMIENTO: Buscar información relevante en la base de conocimiento
             if knowledge_agent := self.get_agent(AgentType.KNOWLEDGE):
                 self.logger.info("Processing with Knowledge Agent...")
+                self.logger.info("Processing with Knowledge Agent...")
                 context = await knowledge_agent.process(context)
                 if context.error:
                     self.logger.warning(f"Knowledge agent error: {context.error}")
@@ -146,7 +168,18 @@ class CoordinatorAgent(BaseAgent, ICoordinatorAgent):
             # 3. LLM: Generar respuesta usando el conocimiento recopilado
             if llm_agent := self.get_agent(AgentType.LLM):
                 self.logger.info("Generating response with LLM Agent...")
+                self.logger.info("Generating response with LLM Agent...")
                 context = await llm_agent.process(context)
+                if context.error:
+                    self.logger.error(f"LLM agent error: {context.error}")
+                    return context
+                else:
+                    response_length = len(context.response) if context.response else 0
+                    self.logger.info(f"LLM generated response ({response_length} chars)")
+            else:
+                self.logger.error("LLM agent not available - cannot generate response")
+                self.set_error(context, "LLM agent not available")
+                return context
                 if context.error:
                     self.logger.error(f"LLM agent error: {context.error}")
                     return context
@@ -178,6 +211,7 @@ class CoordinatorAgent(BaseAgent, ICoordinatorAgent):
             # 5. CLIMA: Obtener información del clima para ubicaciones encontradas
             if context.locations and (weather_agent := self.get_agent(AgentType.WEATHER)):
                 self.logger.info("Getting weather information for locations...")
+                self.logger.info("Getting weather information for locations...")
                 context = await weather_agent.process(context)
                 if context.error:
                     self.logger.warning(f"Weather agent error: {context.error}")
@@ -193,6 +227,7 @@ class CoordinatorAgent(BaseAgent, ICoordinatorAgent):
                 
             # 6. UI: Actualizar interfaz de usuario con toda la información
             if ui_agent := self.get_agent(AgentType.UI):
+                self.logger.info("Updating UI with processed information...")
                 self.logger.info("Updating UI with processed information...")
                 context = await ui_agent.process(context)
                 if context.error:
@@ -219,12 +254,14 @@ class CoordinatorAgent(BaseAgent, ICoordinatorAgent):
             
         except Exception as e:
             error_msg = f"Critical error in coordinator: {str(e)}"
+            error_msg = f"Critical error in coordinator: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             self.set_error(context, error_msg)
             return context
             
     async def get_response(self, query: str) -> AgentContext:
         """
+        Procesa una consulta completa y retorna el contexto con la respuesta.
         Procesa una consulta completa y retorna el contexto con la respuesta.
         
         Args:
