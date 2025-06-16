@@ -3,15 +3,11 @@ Agente especializado en la interfaz de usuario.
 Maneja la presentación de información, mapas y clima.
 """
 import logging
-import logging
 from typing import Dict, List, Any, Optional
-from app.weather.weather import WeatherInfo
 from app.weather.weather import WeatherInfo
 import folium
 from .interfaces import IUIAgent, AgentContext, AgentType
 from .base_agent import BaseAgent
-
-logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
