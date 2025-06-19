@@ -90,7 +90,7 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
 
     
 
-    async def search_knowledge(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
+    async def search_knowledge(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Busca información relevante en la base de conocimiento.
         
