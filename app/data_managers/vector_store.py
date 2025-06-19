@@ -1,16 +1,23 @@
-from typing import List, Dict
+import re
+from typing import List, Dict, Optional
 from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import os
 import json
 from datetime import datetime
 import pickle
+import logging
+
+logger = logging.getLogger(__name__)
 
 class VectorStore:
     """Vector store for tourism domain data with specialized handling for museums and excursions"""
     
     def __init__(self, persist_dir: str):
         self.persist_dir = persist_dir
+        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.collections = set()
         
         # Define directories for each collection type and their domain focus
         self.domain_config = {
@@ -32,164 +39,128 @@ class VectorStore:
         }
         
         # Ensure collection directories exist
-        for config in self.domain_config.values():
+        for name, config in self.domain_config.items():
             os.makedirs(config['dir'], exist_ok=True)
-            
-        # Initialize sentence transformer
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+            self.collections.add(name)
 
-    def _encode_text(self, text: str) -> List[float]:
-        """Convert text to embeddings vector using sentence-transformers"""
-        # Clean and normalize text
-        text = self._preprocess_text(text)
-        
-        # Transform text to embedding vector
-        vector = self.model.encode(text)
-        return vector.tolist()
+    def search(self, 
+            query: str, 
+            k: int = 5, 
+            collections: Optional[List[str]] = None,
+            similarity_threshold: Optional[float] = None
+        ) -> List[Dict]:
+        """Search for items most similar to the query text.
 
-    def _preprocess_text(self, text: str) -> str:
-        """Preprocess text with domain-specific cleaning and normalization"""
-        if not text:
-            return ""
-            
-        # Basic cleaning
-        text = text.lower().strip()
-        
-        # Normalize domain-specific terms
-        replacements = {
-            'museo': 'museum',
-            'galería': 'gallery',
-            'exposición': 'exhibition',
-            'excursión': 'excursion',
-            'visita guiada': 'guided tour',
-            'recorrido': 'tour'
-        }
-        
-        for old, new in replacements.items():
-            text = text.replace(old, new)
-            
-        return text
+        Args:
+            query: The query text
+            k: Number of results to return
+            collections: Optional list of collections to search in. If None, searches all.
+            similarity_threshold: Optional minimum similarity score threshold
 
-    def _prepare_document(self, item: Dict) -> Dict:
-        """Prepare a document for indexing with enhanced metadata"""
-        # Combine relevant fields for embedding
-        text_for_embedding = f"{item['name']} "
-        
-        # Add type-specific fields
-        if item['type'] == 'museum':
-            text_for_embedding += self._prepare_museum_text(item)
-        elif item['type'] == 'excursion':
-            text_for_embedding += self._prepare_excursion_text(item)
-        else:  # destination
-            text_for_embedding += self._prepare_destination_text(item)
-        
-        # Create enhanced document
-        return {
-            'id': item['id'],
-            'embedding': self._encode_text(text_for_embedding),
-            'metadata': {
-                'name': item['name'],
-                'type': item['type'],
-                'domain_category': item.get('domain_category', []),
-                'location': item.get('location', {}),
-                'url': item.get('url', ''),
-                'image_url': item.get('image_url', ''),
-                'source': item.get('source', ''),
-                'source_info': item.get('source_info', {}),
-                'last_updated': item.get('last_updated'),
-                **self._get_type_specific_metadata(item)
-            },
-            'document': item['description']
-        }
-    
-    def _prepare_museum_text(self, item: Dict) -> str:
-        """Prepare museum-specific text for embedding"""
-        collections = ', '.join(item.get('collections', []))
-        services = ', '.join(item.get('services', []))
-        return f"{item['description']} Collections: {collections} Services: {services}"
-    
-    def _prepare_excursion_text(self, item: Dict) -> str:
-        """Prepare excursion-specific text for embedding"""
-        included = ', '.join(item.get('included_services', []))
-        return f"{item['description']} Level: {item.get('difficulty_level', '')} Services: {included}"
-    
-    def _prepare_destination_text(self, item: Dict) -> str:
-        """Prepare destination-specific text for embedding"""
-        activities = ', '.join(item.get('activities', []))
-        return f"{item['description']} Activities: {activities}"
+        Returns:
+            List of items sorted by similarity score
+        """
+        # Get query embedding and process collections
+        query_embedding = self.model.encode(query).tolist()
+        results = self._search_with_embedding(query_embedding, k, collections, similarity_threshold)
+        return results
 
-    def cosine_similarity(self, a: List[float], b: List[float]) -> float:
-        """Calculate cosine similarity between two vectors"""
-        a = np.array(a)
-        b = np.array(b)
-        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-    def search(self, query: str, top_k: int = 5, collection_type: str = None) -> List[Dict]:
-        """Search for most similar items to query"""
-        query_vector = self._encode_text(query)
+    def _search_with_embedding(
+            self,
+            query_embedding: List[float],
+            k: int,
+            collections: Optional[List[str]] = None,
+            similarity_threshold: Optional[float] = None
+        ) -> List[Dict]:
+        """Internal method to search using a pre-computed embedding"""
         results = []
-        
-        # Determine which collections to search
-        collections = [collection_type] if collection_type else self.domain_config.keys()
-        
-        for collection in collections:
-            items = self._load_items(collection)
-            weight = self.domain_config[collection]['weight']
-            
-            for item in items:
-                score = self.cosine_similarity(query_vector, item['embedding']) * weight
-                results.append({
-                    'item': item,
-                    'score': score
-                })
-        
-        # Sort by score and return top k
-        results.sort(key=lambda x: x['score'], reverse=True)
-        return results[:top_k]
+        for collection in collections or self.collections:
+            if collection not in self.domain_config:
+                continue
+                
+            # Process items in collection, re-embedding if needed
+            items = self._process_collection(collection, query_embedding)
+            if not items:
+                continue
 
-    def _get_type_specific_metadata(self, item: Dict) -> Dict:
-        """Extract type-specific metadata"""
-        if item['type'] == 'museum':
-            return {
-                'schedule': json.dumps(item.get('schedule', {'type': 'unknown'})),
-                'price': json.dumps(item.get('price', {'type': 'unknown'})),
-                'collections': json.dumps(item.get('collections', [])),
-                'services': json.dumps(item.get('services', [])),
-                'accessibility': item.get('accessibility', '')
-            }
-        elif item['type'] == 'excursion':
-            return {
-                'duration': json.dumps(item.get('duration', {'type': 'unknown'})),
-                'price': json.dumps(item.get('price', {'type': 'unknown'})),
-                'difficulty_level': item.get('difficulty_level', 'unknown'),
-                'included_services': json.dumps(item.get('included_services', [])),
-                'required_items': json.dumps(item.get('required_items', [])),
-                'meeting_point': item.get('meeting_point', ''),
-                'schedule': json.dumps(item.get('schedule', {'type': 'unknown'})),
-                'max_participants': str(item.get('max_participants')) if item.get('max_participants') is not None else None
-            }
-        else:  # destination
-            return {
-                'coordinates': json.dumps(item.get('coordinates', {})),
-                'activities': json.dumps(item.get('activities', []))
-            }
+            # Calculate similarities
+            weight = self.domain_config[collection]['weight']
+            item_embeddings = np.array([item['embedding'] for item in items])
+            similarities = cosine_similarity([query_embedding], item_embeddings)[0] * weight
+
+            # Add similarity scores
+            for item, score in zip(items, similarities):
+                if similarity_threshold is None or score >= similarity_threshold:
+                    result = {**item}
+                    result.pop('embedding', None)  # Remove embedding from result
+                    result['similarity'] = float(score)
+                    result['collection'] = collection
+                    results.append(result)
+
+        # Sort by similarity and take top k
+        results.sort(key=lambda x: x['similarity'], reverse=True)
+        return results[:k]
+
+    def _process_collection(self, collection: str, query_embedding: List[float]) -> List[Dict]:
+        """Process a single collection and return matching items"""
+        items = self._load_items(collection)
+        self.current_collection = collection  # Set current collection for _validate_and_fix_embeddings
+        return self._validate_and_fix_embeddings(items, query_embedding)
+
+    def _validate_and_fix_embeddings(self, items: List[Dict], query_embedding: List[float]) -> List[Dict]:
+        """Process items and fix embeddings to match query embedding dimension"""
+        valid_items = []
+        needs_update = False
+        query_dim = len(query_embedding)
+        
+        for item in items:
+            if ('embedding' not in item or 
+                not isinstance(item['embedding'], list) or
+                len(item['embedding']) != query_dim):
+                # Regenerate embedding
+                text = self._prepare_text_for_embedding(item)
+                item['embedding'] = self.model.encode(text).tolist()
+                needs_update = True
+            valid_items.append(item)
+            
+        if needs_update and hasattr(self, 'current_collection'):
+            self._save_items(self.current_collection, valid_items)
+            
+        return valid_items
+
+    def _prepare_text_for_embedding(self, item: Dict) -> str:
+        """Prepare item text for embedding generation"""
+        # Concatenate relevant fields for embedding
+        fields = ['name', 'description', 'category', 'location']
+        text_parts = []
+        
+        for field in fields:
+            if field in item and item[field]:
+                text_parts.append(str(item[field]))
+                
+        return ' '.join(text_parts)
+
+    def _save_items(self, collection: str, items: List[Dict]):
+        """Save items in a collection"""
+        for item in items:
+            self._save_item(collection, item)
 
     def _save_item(self, collection_name: str, doc: Dict):
-        """Save a single document to its respective collection directory."""
+        """Save a single document to its collection directory"""
         collection_path = self.domain_config[collection_name]['dir']
         file_path = os.path.join(collection_path, f"{doc['id']}.json")
         with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(doc, f, ensure_ascii=False, indent=4)
+            json.dump(doc, f, ensure_ascii=False, indent=2)
 
     def _load_items(self, collection_name: str) -> List[Dict]:
-        """Load all documents from a given collection directory."""
+        """Load all documents from a given collection directory"""
         collection_path = self.domain_config[collection_name]['dir']
         loaded_docs = []
         if not os.path.exists(collection_path):
             return []
             
         for filename in os.listdir(collection_path):
-            if filename.endswith('.json'):
+            if filename.endswith('.json') and not filename.startswith("index"):
                 file_path = os.path.join(collection_path, filename)
                 try:
                     with open(file_path, 'r', encoding='utf-8') as f:
@@ -199,14 +170,140 @@ class VectorStore:
         return loaded_docs
 
     def add_items(self, items: List[Dict]):
-        """Add items to appropriate collections."""
+        """Add or update items in appropriate collections"""
         for item in items:
-            # Prepare document with embedding and metadata
-            item_type = item.get('type', 'destinations')  # Default to destinations
-            if item_type not in self.domain_config:
-                print(f"Warning: Unknown item type {item_type}, using 'destinations'")
-                item_type = 'destinations'
+            try:
+                # Determinar la colección basada en el tipo de item
+                collection = self._determine_collection(item)
+                if not collection:
+                    logger.warning(f"Could not determine collection for item: {item.get('id', 'unknown')}")
+                    continue
+                
+                # Preparar el texto para embedding
+                text = self._prepare_text_for_embedding(item)
+                
+                # Generar embedding
+                embedding = self.model.encode(text).tolist()
+                
+                # Añadir embedding al item
+                item['embedding'] = embedding
+                
+                # Guardar en la colección apropiada
+                self._save_item(collection, item)
+                
+            except Exception as e:
+                logger.error(f"Error adding item {item.get('id', 'unknown')}: {str(e)}")
 
-            doc = self._prepare_document(item)
-            self._save_item(item_type, doc)
+    def store(self, collection: str, items: List[Dict], regenerate_embeddings: bool = False):
+        """Store items in the vector store, optionally regenerating embeddings"""
+        if collection not in self.domain_config:
+            raise ValueError(f"Unknown collection: {collection}")
+            
+        # Process and store each item
+        for item in items:
+            if not isinstance(item, dict) or 'id' not in item:
+                continue
+                
+            try:
+                # Generar o regenerar embedding si es necesario
+                if regenerate_embeddings or 'embedding' not in item:
+                    text = self._prepare_text_for_embedding(item)
+                    item['embedding'] = self.model.encode(text).tolist()
+                
+                # Asegurar que tengamos toda la metadata necesaria
+                item['timestamp'] = datetime.now().isoformat()
+                
+                # Guardar el item
+                self._save_item(collection, item)
+                
+            except Exception as e:
+                logger.error(f"Error storing item {item.get('id', 'unknown')}: {str(e)}")
 
+    def _determine_collection(self, item: Dict) -> Optional[str]:
+        """Determina la colección apropiada para un item basado en su tipo"""
+        item_type = item.get('type', '').lower()
+        
+        if 'museum' in item_type or 'museo' in item_type:
+            return 'museums'
+        elif 'excursion' in item_type or 'tour' in item_type:
+            return 'excursions'
+        elif 'destination' in item_type or 'place' in item_type:
+            return 'destinations'
+            
+        # Análisis de texto alternativo
+        text = f"{item.get('name', '')} {item.get('description', '')}"
+        text = text.lower()
+        
+        if any(word in text for word in ['museum', 'museo', 'galería', 'exhibition']):
+            return 'museums'
+        elif any(word in text for word in ['excursion', 'tour', 'trip', 'viaje']):
+            return 'excursions'
+            
+        return 'destinations'  # colección por defecto
+
+    def add_texts(self, collection_name: str, items: List[Dict]) -> None:
+        """Añade textos a una colección específica en el vector store"""
+        if not items:
+            return
+        
+        # Crear directorio de la colección si no existe
+        collection_dir = os.path.join(self.persist_dir, collection_name)
+        os.makedirs(collection_dir, exist_ok=True)
+        
+        # Generar embeddings para todos los textos
+        texts = [item['text'] for item in items]
+        embeddings = self.model.encode(texts, convert_to_tensor=True)
+        
+        # Guardar cada item con su embedding
+        for idx, item in enumerate(items):
+            item_id = item['id']
+
+            item_id = re.sub(r'[\\/:"*?<>|]', '', item_id) # Elimina caracteres no válidos
+            item_id = item_id.replace('"', '')
+
+            vector_file = os.path.join(collection_dir, f"{item_id}.pkl")
+            
+            vector_data = {
+                'id': item_id,
+                'embedding': embeddings[idx].cpu().numpy(),
+                'metadata': item['metadata']
+            }
+            
+            # Guardar en disco
+            with open(vector_file, 'wb') as f:
+                pickle.dump(vector_data, f)
+        
+        # Actualizar set de colecciones
+        self.collections.add(collection_name)
+        
+        # Actualizar el índice de la colección
+        self._update_collection_index(collection_name)
+
+    def _update_collection_index(self, collection_name: str) -> None:
+        """Actualiza el índice de una colección específica"""
+        collection_dir = os.path.join(self.persist_dir, collection_name)
+        index_file = os.path.join(collection_dir, 'index.json')
+        
+        # Recopilar metadatos de todos los archivos .pkl
+        index_data = {}
+        for file in os.listdir(collection_dir):
+            if file.endswith('.pkl'):
+                file_path = os.path.join(collection_dir, file)
+                try:
+                    with open(file_path, 'rb') as f:
+                        data = pickle.load(f)
+                        item_id = data['id']
+                        metadata = data['metadata']
+                        index_data[item_id] = {
+                            'name': metadata.get('name', ''),
+                            'type': metadata.get('type', ''),
+                            'location': metadata.get('location', ''),
+                            'file': file
+                        }
+                except Exception as e:
+                    logger.error(f"Error loading {file}: {str(e)}")
+                    continue
+        
+        # Guardar índice
+        with open(index_file, 'w', encoding='utf-8') as f:
+            json.dump(index_data, f, ensure_ascii=False, indent=2)

@@ -32,6 +32,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+st.set_page_config(layout="wide")
+
 # Título y descripción
 st.title("🏖️ Guía Turístico Virtual de Cuba")
 st.markdown("""
@@ -200,50 +202,18 @@ if update_clicked:
 if st.session_state.updating_db:
     try:
         with st.spinner(UPDATING_DB_MSG):
-            logger.info(UPDATING_DB_MSG)
-            
-            # Obtener el agente de conocimiento usando el método apropiado
             knowledge_agent = coordinator.get_agent(AgentType.KNOWLEDGE)
-            if not knowledge_agent:
-                logger.error(KNOWLEDGE_AGENT_NOT_AVAILABLE)
-                agent_status = coordinator.get_agent_status()
-                logger.error(f"Estado actual de los agentes: {agent_status}")
-                raise AgentNotAvailableError(KNOWLEDGE_AGENT_NOT_AVAILABLE)
             
-            # Verificar que knowledge_agent es la instancia correcta
-            if not isinstance(knowledge_agent, KnowledgeAgent):
-                logger.error(f"Tipo de agente incorrecto: {type(knowledge_agent)}")
-                raise AgentNotAvailableError(KNOWLEDGE_AGENT_WRONG_TYPE)
+            # ✅ Un solo método, simple
+            asyncio.run(knowledge_agent.refresh_knowledge())
             
-            try:
-                # Usar el bucle de eventos existente
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                # Si no hay bucle de eventos, crear uno nuevo
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-            # Ejecutar refresh_knowledge
-            try:
-                loop.run_until_complete(knowledge_agent.refresh_knowledge())
-                st.success(DB_UPDATED_MSG)
-                logger.info(DB_UPDATED_MSG)
-            except Exception as e:
-                logger.error(f"Error en refresh_knowledge: {str(e)}", exc_info=True)
-                raise
-
-    except AgentNotAvailableError as e:
-        error_msg = f"❌ Error: {str(e)}"
-        st.error(error_msg)
-        logger.error(error_msg)
+            st.success(DB_UPDATED_MSG)
     except Exception as e:
-        error_msg = f"❌ Error actualizando la base de datos: {str(e)}"
-        st.error(error_msg)
-        logger.error(error_msg, exc_info=True)
+        st.error(f"❌ Error: {str(e)}")
     finally:
         st.session_state.updating_db = False
-        # Forzar un re-renderizado para actualizar la interfaz
         st.rerun()
+
 
 
 # Interface principal con dos columnas
@@ -315,13 +285,13 @@ with col2:
                     
                     # Mostrar el itinerario
                     itinerary = last_message["itinerary"]
-                    for day in itinerary:
+                    for day in itinerary["days"]:
                         with st.expander(f"Día {day['day']}", expanded=True):
                             for activity in day['activities']:
                                 activity_html = f"""
                                 <div style="margin-bottom: 12px; padding: 10px; border-left: 3px solid var(--primary-color); background: rgba(var(--primary-color-rgb), 0.05);">
                                     <div style="font-weight: 600; color: var(--primary-color);">
-                                        {activity['time']} - {activity['name']}
+                                        ⏱️ {activity['duration_hours']}h - {activity['name']}
                                     </div>
                                     <div style="font-size: 0.9rem; margin-top: 4px;">
                                         {activity['description']}

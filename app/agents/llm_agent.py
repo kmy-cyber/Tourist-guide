@@ -116,7 +116,8 @@ class LLMAgent(BaseAgent, ILLMAgent):
             "4. Mantén un tono amigable, profesional y personalizado",
             "5. Si el usuario dice su nombre, recuérdalo para futuras interacciones",
             "6. Adapta tu respuesta según sus intereses y consultas anteriores",
-            "7. Si es su primera vez, dale una bienvenida especial a Cuba"
+            "7. Si es su primera vez, dale una bienvenida especial a Cuba",
+            "8. No menciones ni hagas referencia a ningún lugar que no se haya pasado en la Información disponible"
         ])
         
         return "\n".join(prompt_parts)

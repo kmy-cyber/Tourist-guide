@@ -1,7 +1,7 @@
 """
 Agente especializado en el manejo de ubicaciones y geocodificación.
 """
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import re
 import json
 import asyncio
@@ -243,87 +243,140 @@ Si el texto no menciona ninguna ubicación, devuelve un array vacío []."""
                 
         return geocoded_locations
         
-    async def get_coordinates(self, location: str) -> Optional[Dict[str, float]]:
-        """
-        Obtiene coordenadas para una ubicación usando caché o geocodificación.
-        """
-        # Normalizar nombre para el caché
-        location_key = location.strip()
-        
-        # 1. Revisar caché primero (incluye coordenadas conocidas)
-        if location_key in self._location_cache:
-            self.logger.debug(f"Cache hit for: {location_key}")
-            return self._location_cache[location_key]
-            
-        # También buscar variaciones comunes del nombre
-        location_variants = [
+    # Helper methods for get_coordinates
+    def _check_cache(self, location_key: str) -> Optional[Dict[str, float]]:
+        """Check location cache including common variants"""
+        variants = [
             location_key,
             location_key.replace("La Habana", "Habana"),
             location_key.replace("Habana", "La Habana")
         ]
         
-        for variant in location_variants:
+        for variant in variants:
             if variant in self._location_cache:
                 self.logger.debug(f"Cache hit for variant '{variant}' of '{location_key}'")
                 coords = self._location_cache[variant]
-                # Guardar también la variante original
+                self._location_cache[location_key] = coords  # Cache original variant
+                return coords
+        return None
+
+    def _check_known_locations(self, location_key: str) -> Optional[Dict[str, float]]:
+        """Check against known location coordinates with fuzzy matching"""
+        for known_location, coords in self._known_coordinates.items():
+            if (known_location.lower() in location_key.lower() or 
+                location_key.lower() in known_location.lower()):
+                self.logger.info(f"Fuzzy match: '{location_key}' -> '{known_location}'")
                 self._location_cache[location_key] = coords
                 return coords
+        return None
+
+    def _store_geocoding_result(self, location_key: str, error_msg: Optional[str] = None, 
+                              result: Optional[Any] = None, coords: Optional[Dict[str, float]] = None):
+        """Store geocoding result or failure in cache"""
+        details = {
+            "name": location_key,
+            "city": None,
+            "region": None,
+            "country": "Cuba",
+            "address": None,
+            "coordinates": coords,
+            "geocoding_attempted": True,
+            "geocoding_error": error_msg
+        }
         
-        # 2. Si no hay geocodificador, intentar con coordenadas conocidas
+        if result and hasattr(result, 'raw'):
+            details.update({
+                "name": result.raw.get("name", location_key),
+                "city": result.raw.get("city"),
+                "region": result.raw.get("state"),
+                "address": result.address,
+            })
+        
+        self._location_cache[location_key] = details
+
+    def _is_valid_cuba_coords(self, coords: Dict[str, float]) -> bool:
+        """Verify coordinates are within Cuba's bounding box"""
+        return (19.0 <= coords["lat"] <= 24.0 and 
+                -85.0 <= coords["lon"] <= -74.0)
+
+    async def _try_geocode_query(self, query: str, location_key: str) -> Tuple[Optional[Dict[str, float]], Optional[str]]:
+        """Try to geocode a single query"""
+        try:
+            self.logger.debug(f"Geocoding query: {query}")
+            result = self._geolocator.geocode(
+                query,
+                timeout=15,
+                exactly_one=True,
+                country_codes=['cu']
+            )
+            
+            if result:
+                coords = {
+                    "lat": round(result.latitude, 6),
+                    "lon": round(result.longitude, 6)
+                }
+                
+                if self._is_valid_cuba_coords(coords):
+                    self._location_cache[location_key] = coords
+                    self.logger.info(f"Successfully geocoded: {location_key}")
+                    self._store_geocoding_result(location_key, result=result, coords=coords)
+                    return coords, None
+                error_msg = f"Coordinates outside Cuba: {coords}"
+                self.logger.warning(f"{error_msg} for {location_key}")
+                return None, error_msg
+                    
+        except (GeocoderTimedOut, GeocoderUnavailable) as e:
+            error_msg = f"Geocoding timeout/unavailable: {str(e)}"
+            self.logger.debug(f"{error_msg} for query '{query}'")
+            return None, error_msg
+        except Exception as e:
+            error_msg = f"Unexpected error: {str(e)}"
+            self.logger.error(f"{error_msg} geocoding {location_key}")
+            return None, error_msg
+        
+        return None, "No results found"
+
+    async def get_coordinates(self, location: str) -> Optional[Dict[str, float]]:
+        """
+        Obtiene coordenadas para una ubicación usando caché o geocodificación.
+        
+        Args:
+            location: Nombre de la ubicación a geocodificar
+            
+        Returns:
+            Dict con lat/lon si se encuentra, None si no
+        """
+        if not location or not isinstance(location, str):
+            return None
+
+        location_key = location.strip()
+        if not location_key:
+            return None
+
+        # 1. Check cache
+        if coords := self._check_cache(location_key):
+            return coords
+
+        # 2. Check known locations if no geocoder
         if not self._geolocator:
             self.logger.warning(f"No geolocator available for: {location_key}")
-            # Intentar busqueda fuzzy en coordenadas conocidas
-            for known_location, coords in self._known_coordinates.items():
-                if (known_location.lower() in location_key.lower() or 
-                    location_key.lower() in known_location.lower()):
-                    self.logger.info(f"Fuzzy match: '{location_key}' -> '{known_location}'")
-                    self._location_cache[location_key] = coords
-                    return coords
-            return None
-            
-        try:
-            # 3. Intentar geocodificación con diferentes variantes
-            search_queries = [
-                f"{location_key}, Cuba",
-                f"{location_key}, La Habana, Cuba" if "Habana" not in location_key else f"{location_key}, Cuba",
-                location_key
-            ]
-            
-            for query in search_queries:
-                try:
-                    self.logger.debug(f"Geocoding query: {query}")
-                    result = self._geolocator.geocode(
-                        query,
-                        timeout=15,
-                        exactly_one=True,
-                        country_codes=['cu']  # Limitar a Cuba
-                    )
-                    
-                    if result:
-                        coords = {
-                            "lat": round(result.latitude, 6),
-                            "lon": round(result.longitude, 6)
-                        }
-                        
-                        # Verificar que las coordenadas están en Cuba (aproximadamente)
-                        if (19.0 <= coords["lat"] <= 24.0 and 
-                            -85.0 <= coords["lon"] <= -74.0):
-                            
-                            self._location_cache[location_key] = coords
-                            self.logger.info(f"Successfully geocoded: {location_key}")
-                            return coords
-                        else:
-                            self.logger.warning(f"Coordinates outside Cuba for {location_key}: {coords}")
-                            
-                except (GeocoderTimedOut, GeocoderUnavailable) as e:
-                    self.logger.debug(f"Geocoding timeout/unavailable for query '{query}': {str(e)}")
-                    continue
-                    
-                # Pequeña pausa entre consultas para evitar rate limiting
-                await asyncio.sleep(0.5)
-                
-        except Exception as e:
-            self.logger.error(f"Unexpected error geocoding {location_key}: {str(e)}")
-            
+            return self._check_known_locations(location_key)
+
+        # 3. Try geocoding with variants
+        search_queries = [
+            f"{location_key}, Cuba",
+            f"{location_key}, La Habana, Cuba" if "Habana" not in location_key else f"{location_key}, Cuba",
+            location_key
+        ]
+        
+        last_error = None
+        for query in search_queries:
+            coords, error = await self._try_geocode_query(query, location_key)
+            if coords:
+                return coords
+            last_error = error
+
+        # Store failed attempt
+        self._store_geocoding_result(location_key, error_msg=last_error)
+        self.logger.warning(f"Failed to geocode: {location_key}")
         return None

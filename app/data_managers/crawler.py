@@ -17,10 +17,11 @@ logger = logging.getLogger(__name__)
 
 class CrawlerType(Enum):
     """Tipos de crawlers disponibles"""
+    HOTEL = "hotel"
     MUSEUM = "museum"
     EXCURSION = "excursion"
     DESTINATION = "destination"
-    ATTRACTION = "attraction"  # Para sitios turísticos y lugares de interés general
+    ATTRACTION = "attraction"
     MAIN_DESTINATION = "main_destination"
     ALTERNATIVE_DESTINATION = "alternative_destination"
     PROVINCE_INFO = "province_info"
@@ -153,6 +154,7 @@ class BaseSiteCrawler(ABC):
             }
         }
 
+
 class DataCleaner:
     """Clase para limpieza y estandarización de datos"""
     
@@ -263,7 +265,7 @@ class CrawlerManager:
             if crawler_type not in self.crawlers:
                 logger.warning(f"Tipo de crawler no encontrado: {crawler_type.value}")
                 continue
-                
+            
             crawler = self.crawlers[crawler_type]
             try:
                 logger.info(f"Ejecutando crawler {crawler.config.name}")

@@ -5,7 +5,7 @@ Sistema de Planificación de Itinerarios Turísticos Optimizado
 import random
 import numpy as np
 import math
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Set
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -21,10 +21,16 @@ class WeatherCondition(Enum):
     STORMY = "tormentoso"
 
 class ActivityType(Enum):
+    TOUR = "tour"
+    CULTURAL = "cultural"
     MUSEUM = "museo"
     EXCURSION = "excursion"
     RESTAURANT = "restaurante"
     TRANSPORT = "transporte"
+    NATURE = "naturaleza"
+    ENTERTAINMENT = "entretenimiento"
+    SHOPPING = "compras"
+    ACCOMMODATION = "alojamiento"
 
 @dataclass
 class Location:
@@ -76,7 +82,7 @@ class UserPreferences:
     """Preferencias del usuario simplificadas"""
     start_date: datetime
     end_date: datetime
-    max_budget: float = 1000.0
+    max_budget: float = 0.0  # 0 significa sin límite de presupuesto
     daily_start_hour: int = 9
     daily_end_hour: int = 18
     max_daily_duration: int = 480  # minutos
@@ -112,8 +118,19 @@ class DayPlan:
     def get_walking_distance(self) -> float:
         if len(self.items) <= 1:
             return 0.0
-        return sum(self.items[i].activity.location.distance_to(self.items[i+1].activity.location) 
-                  for i in range(len(self.items)-1))
+        
+        # Filter out items without location
+        items_with_location = [item for item in self.items if item.activity.location is not None]
+        if len(items_with_location) <= 1:
+            return 0.0
+        
+        # Calculate distances only between consecutive activities with locations
+        total_distance = 0.0
+        for i in range(len(items_with_location)-1):
+            total_distance += items_with_location[i].activity.location.distance_to(
+                items_with_location[i+1].activity.location
+            )
+        return total_distance
 
 class Itinerary:
     """Itinerario completo optimizado"""
@@ -231,8 +248,8 @@ class ItineraryEvaluator:
                 if not item.activity.is_available_at(item.start_time):
                     penalty += 0.2
         
-        # Violación de presupuesto
-        if itinerary.get_total_cost() > self.preferences.max_budget:
+        # Violación de presupuesto solo si hay límite establecido
+        if self.preferences.max_budget > 0 and itinerary.get_total_cost() > self.preferences.max_budget:
             penalty += 1.0
         
         return penalty
@@ -250,10 +267,23 @@ class GeneticAlgorithmPlanner:
         self.population: List[Itinerary] = []
         self.best_solution: Optional[Itinerary] = None
         self.best_score: float = 0.0
+        # Tracking de actividades usadas
+        self.used_activities: Set[str] = set()
+        
+    def get_available_activities(self, budget: float) -> List[TourismActivity]:
+        """Obtiene actividades disponibles que no han sido usadas"""
+        if budget <= 0:  # Sin límite de presupuesto
+            return [a for a in self.activities if a.id not in self.used_activities]
+        return [a for a in self.activities 
+                if (a.cost is None or a.cost <= budget)
+                and a.id not in self.used_activities]
     
     def optimize(self, max_iterations: int = 500) -> Itinerary:
         """Optimización principal"""
         logger.info(f"Iniciando optimización GA: {self.population_size} individuos, {max_iterations} iteraciones")
+        
+        # Reiniciar tracking de actividades
+        self.used_activities.clear()
         
         # Inicializar población
         self._initialize_population()
@@ -297,7 +327,7 @@ class GeneticAlgorithmPlanner:
     
     def _generate_random_day(self, date: datetime, budget: float) -> DayPlan:
         """Generación de día aleatorio con restricciones"""
-        available_activities = [a for a in self.activities if a.cost <= budget]
+        available_activities = self.get_available_activities(budget)
         if not available_activities:
             return DayPlan(date=date, weather=random.choice(list(WeatherCondition)))
         
@@ -306,15 +336,15 @@ class GeneticAlgorithmPlanner:
         current_cost = 0.0
         
         # Selección greedy-aleatoria
-        while (current_time.hour < self.preferences.daily_end_hour - 1 and 
-               available_activities and current_cost < budget):
-            
+        while (current_time.hour < self.preferences.daily_end_hour - 1 and available_activities):
             # Seleccionar con sesgo hacia actividades mejor valoradas
             weights = [a.rating for a in available_activities]
             activity = random.choices(available_activities, weights=weights)[0]
             available_activities.remove(activity)
+            self.used_activities.add(activity.id)
             
-            if current_cost + activity.cost <= budget:
+            # Solo verificar presupuesto si hay límite
+            if budget <= 0 or current_cost + activity.cost <= budget:
                 item = ItineraryItem(
                     activity=activity,
                     start_time=current_time,
@@ -330,7 +360,7 @@ class GeneticAlgorithmPlanner:
             items=selected_items,
             weather=random.choice(list(WeatherCondition))
         )
-    
+        
     def _evaluate_population(self) -> List[float]:
         """Evaluación vectorizada de población"""
         fitness_scores = []
@@ -381,17 +411,29 @@ class GeneticAlgorithmPlanner:
         return self.population[best_idx]
     
     def _crossover(self, parent1: Itinerary, parent2: Itinerary) -> Itinerary:
-        """Cruce uniforme por días"""
+        """Cruce uniforme por días manteniendo unicidad de actividades"""
         if len(parent1.days) != len(parent2.days):
             return random.choice([parent1, parent2]).clone()
         
+        # Limpiar tracking para el nuevo hijo
+        self.used_activities.clear()
         child_days = []
+        
         for i in range(len(parent1.days)):
             # Selección aleatoria de día padre
             selected_day = random.choice([parent1.days[i], parent2.days[i]])
+            
+            # Verificar actividades no usadas
+            valid_items = []
+            for item in selected_day.items:
+                if item.activity.id not in self.used_activities:
+                    valid_items.append(item)
+                    self.used_activities.add(item.activity.id)
+            
+            # Crear nuevo día solo con actividades válidas
             child_days.append(DayPlan(
                 date=selected_day.date,
-                items=selected_day.items.copy(),
+                items=valid_items,
                 weather=selected_day.weather
             ))
         
@@ -424,23 +466,33 @@ class GeneticAlgorithmPlanner:
             day2.items.append(item1)
     
     def _mutate_replace(self, itinerary: Itinerary):
-        """Reemplazo de actividad"""
+        """Reemplazo de actividad manteniendo unicidad"""
         day = random.choice(itinerary.days)
         if not day.items:
             return
         
         old_item = random.choice(day.items)
-        new_activity = random.choice(self.activities)
+        # Liberar actividad actual
+        self.used_activities.remove(old_item.activity.id)
         
-        new_item = ItineraryItem(
-            activity=new_activity,
-            start_time=old_item.start_time,
-            transport_time=old_item.transport_time,
-            transport_cost=old_item.transport_cost
-        )
-        
-        day.items.remove(old_item)
-        day.items.append(new_item)
+        # Buscar nueva actividad no usada
+        available_activities = self.get_available_activities(old_item.activity.cost * 1.2)
+        if available_activities:
+            new_activity = random.choice(available_activities)
+            self.used_activities.add(new_activity.id)
+            
+            new_item = ItineraryItem(
+                activity=new_activity,
+                start_time=old_item.start_time,
+                transport_time=old_item.transport_time,
+                transport_cost=old_item.transport_cost
+            )
+            
+            day.items.remove(old_item)
+            day.items.append(new_item)
+        else:
+            # Si no hay actividades disponibles, restaurar la anterior
+            self.used_activities.add(old_item.activity.id)
     
     def _mutate_shuffle(self, itinerary: Itinerary):
         """Reordenamiento de actividades en un día"""
