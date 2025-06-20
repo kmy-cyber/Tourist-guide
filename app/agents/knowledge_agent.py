@@ -439,18 +439,25 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
                 collection_name = self._get_collection_name(item['type'])
                 
                 # Preparar texto para embedding
+                location = item.get('location', {})
+                location_name = location.get('name', '') if isinstance(location, dict) else str(location)
+                
                 text_parts = [
-                    item['name'],
-                    item['description'],
-                    item.get('location', {}).get('name', ''),
-                    item.get('location', {}).get('address', '')
+                    str(item.get('name', '')),
+                    str(item.get('description', '')),
+                    f"Tipo: {item.get('type', 'desconocido')}",
+                    f"Ubicación: {location_name}"
                 ]
-                text = ' '.join(filter(None, text_parts))
+                
+                # Usamos un separador para que el modelo entienda mejor la estructura.
+                text_for_embedding = " | ".join(filter(None, text_parts))
+
+                logger.info(f"text_for_embedding: {text_for_embedding[:100]}...")
                 
                 # Preparar item para vector store
                 vector_item = {
                     'id': item['id'],
-                    'text': text,
+                    'text': text_for_embedding,
                     'metadata': item
                 }
                 

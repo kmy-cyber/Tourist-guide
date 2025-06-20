@@ -62,6 +62,9 @@ class VectorStore:
         """
         # Get query embedding and process collections
         query_embedding = self.model.encode(query).tolist()
+
+        logger.info("Searching with query: %s", query)
+
         results = self._search_with_embedding(query_embedding, k, collections, similarity_threshold)
         return results
 
@@ -70,7 +73,7 @@ class VectorStore:
             query_embedding: List[float],
             k: int,
             collections: Optional[List[str]] = None,
-            similarity_threshold: Optional[float] = None
+            similarity_threshold: Optional[float] = 0.5
         ) -> List[Dict]:
         """Internal method to search using a pre-computed embedding"""
         results = []
@@ -90,7 +93,10 @@ class VectorStore:
 
             # Add similarity scores
             for item, score in zip(items, similarities):
+                
                 if similarity_threshold is None or score >= similarity_threshold:
+                    logger.info("Processing item: %s with score: %f", item.get('id', 'unknown'), score)
+                    
                     result = {**item}
                     result.pop('embedding', None)  # Remove embedding from result
                     result['similarity'] = float(score)
@@ -131,7 +137,7 @@ class VectorStore:
     def _prepare_text_for_embedding(self, item: Dict) -> str:
         """Prepare item text for embedding generation"""
         # Concatenate relevant fields for embedding
-        fields = ['name', 'description', 'category', 'location']
+        fields = ['id', 'text', 'metadata']
         text_parts = []
         
         for field in fields:

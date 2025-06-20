@@ -74,13 +74,18 @@ class PlannerAgent(BaseAgent, IPlannerAgent):
                 if not self._has_sufficient_info(context):
                     self._apply_defaults(context)
 
+                # Corregir el valor de duration_days para que no sea None
+                duration_days = preferences.get('duration_days')
+                if duration_days is None:
+                    duration_days = 3 # Asignar un valor por defecto
+
                 # Crear UserPreferences para el planificador
                 planner_preferences = UserPreferences(
                     start_date=datetime.now(),
-                    end_date=datetime.now() + timedelta(days=preferences.get('duration_days', 3)),
-                    max_budget=float(preferences.get('budget', 300)),
+                    end_date=datetime.now() + timedelta(days=preferences.get('duration_days') or 3),
+                    max_budget=float(preferences.get('budget') or 300),
                     interest_categories=preferences.get('interests', []),
-                    max_walking_distance=float(preferences.get('max_walking_distance', 5.0))
+                    max_walking_distance=float(preferences.get('max_walking_distance') or 5.0)
                 )
                 
                 # Buscar actividades disponibles usando el agente de conocimiento
@@ -135,95 +140,57 @@ class PlannerAgent(BaseAgent, IPlannerAgent):
     async def _extract_preferences_from_query(self, context: AgentContext) -> Dict[str, Any]:
         """
         Extrae preferencias del usuario desde la consulta usando LLM para mejor precisión.
-        
-        Args:
-            context: Contexto con la consulta del usuario
-            
-        Returns:
-            Diccionario con las preferencias extraídas
+        Esta versión es más robusta para parsear y sanear la respuesta del LLM.
         """
-        # Verificar si tenemos acceso al LLM
         if not hasattr(self, 'coordinator'):
-            self.logger.warning("No coordinator available for LLM extraction")
+            self.logger.warning("No coordinator available for LLM extraction, falling back to patterns.")
             return self._extract_preferences_with_patterns(context.query)
             
         llm_agent = self.coordinator.get_agent(AgentType.LLM)
         if not llm_agent:
-            self.logger.warning("No LLM agent available, falling back to pattern matching")
+            self.logger.warning("No LLM agent available, falling back to pattern matching.")
             return self._extract_preferences_with_patterns(context.query)
 
         try:
-            # Construir prompt específico para extracción de preferencias
             system_prompt = """Eres un asistente especializado en planificación turística.
             Analiza la consulta del usuario y extrae las siguientes preferencias:
             - duration_days: número de días del viaje (requerido)
             - budget: presupuesto numérico (sin símbolos monetarios)
             - travel_type: tipo de viaje (familia, pareja, solo, grupo)
-            - start_hour: hora preferida de inicio de actividades (8-12)
-            - end_hour: hora preferida de fin de actividades (16-22)
-            - max_daily_activities: número máximo de actividades por día (1-8)
-            - interests: lista de intereses (cultura, naturaleza, gastronomía, vida_nocturna, arquitectura, música, compras, aventura)
-            - activity_preferences: lista de tipos específicos de actividades (museos, tours, excursiones, restaurantes, playas, parques)
-            - accessibility: requerimientos especiales (movilidad_reducida, niños_pequeños, adultos_mayores)
+            - interests: lista de intereses (cultura, naturaleza, gastronomía, etc.)
             
-            Responde SOLO en formato JSON. No incluyas campos sin valores claros. Ejemplo:
-            {
-                "duration_days": 3,
-                "budget": 500,
-                "travel_type": "familia",
-                "start_hour": 9,
-                "end_hour": 18,
-                "max_daily_activities": 4,
-                "interests": ["cultura", "naturaleza"],
-                "activity_preferences": ["museos", "parques"],
-                "accessibility": ["niños_pequeños"]
-            }"""
+            Responde ÚNICAMENTE con un objeto JSON. No añadas texto explicativo.
+            Ejemplo: {"duration_days": 3, "interests": ["playa", "naturaleza"]}
+            """
             
-            # Procesar contexto adicional
-            additional_context = ""
-            user_context = context.metadata.get("user_context", {})
-            if user_context:
-                if prev_interests := user_context.get("interests"):
-                    additional_context += f"\nIntereses previos del usuario: {', '.join(prev_interests)}"
-                if prev_locations := user_context.get("visited_locations"):
-                    additional_context += f"\nLugares ya visitados: {', '.join(prev_locations)}"
-            
-            user_context += f"\nPetición del usuario:\n{context.query}"
-            
-            # Combinar prompt con contexto
-            if additional_context:
-                system_prompt += f"\n\nContexto adicional:\n{additional_context}"
-            
-            
-            # Generar respuesta con el LLM
-            json_response = await llm_agent.generate_response(
+            llm_response_text = await llm_agent.generate_response(
                 system_prompt=system_prompt,
                 user_prompt=context.query
             )
             
-            try:
-                # Parsear la respuesta JSON
-                preferences = json.loads(json_response)
+            json_match = re.search(r'\{.*\}', llm_response_text, re.DOTALL)
+            
+            if json_match:
+                json_string = json_match.group(0)
                 
-                # Validar y limpiar preferencias
-                if preferences.get("duration_days"):
-                    preferences["duration_days"] = max(1, min(14, int(preferences["duration_days"])))
-                if preferences.get("budget"):
-                    preferences["budget"] = max(100, float(preferences["budget"]))
-                if preferences.get("max_daily_activities"):
-                    preferences["max_daily_activities"] = max(1, min(8, int(preferences["max_daily_activities"])))
-                
-                self.logger.info(f"Successfully extracted preferences with LLM: {preferences}")
-                return preferences
-                
-            except json.JSONDecodeError as e:
-                self.logger.error(f"Failed to parse LLM response as JSON: {str(e)}")
+                # Sanear la cadena de JSON para eliminar escapes inválidos como \_
+                sanitized_json_string = json_string.replace('\\_', '_')
+
+                try:
+                    # Usar la cadena saneada para el parseo
+                    preferences = json.loads(sanitized_json_string)
+                    self.logger.info(f"Preferencias extraídas y saneadas con LLM: {preferences}")
+                    return preferences
+                except json.JSONDecodeError as e:
+                    self.logger.error(f"Fallo al parsear JSON saneado: {e}. String: {sanitized_json_string}")
+                    return self._extract_preferences_with_patterns(context.query)
+            else:
+                self.logger.warning(f"No se encontró un bloque JSON en la respuesta del LLM. Usando patrones. Respuesta: {llm_response_text}")
                 return self._extract_preferences_with_patterns(context.query)
                 
         except Exception as e:
-            self.logger.error(f"Error using LLM for preference extraction: {str(e)}")
-            return self._extract_preferences_with_patterns(context.query)
-            
+            self.logger.error(f"Error crítico usando LLM para extracción de preferencias: {str(e)}")
+            return self._extract_preferences_with_patterns(context.query)      
     def _extract_preferences_with_patterns(self, query: str) -> Dict[str, Any]:
         """
         Método de respaldo que usa patrones regex para extraer preferencias.
