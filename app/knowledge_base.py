@@ -15,7 +15,7 @@ class TourismKB:
         self.data_dir = data_dir
         self.vector_store = VectorStore(os.path.join(data_dir, 'vectors'))
 
-    async def search(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
+    async def search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Búsqueda simplificada"""
         try:
             # Búsqueda directa en vector store

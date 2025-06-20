@@ -62,33 +62,32 @@ class SmartCrawler:
         self.cache = {}
     
     async def enhance_response(self, query: str, response: Dict) -> Tuple[Dict, List[str]]:
-        """Mejorar respuesta automáticamente"""
+        """Mejorar respuesta automáticamente gestionando la sesión por consulta."""
         
-        if not self.session:
-            self.session = aiohttp.ClientSession()
-        
-        # 1. Detectar gaps
-        gaps = self._detect_gaps(response)
-        if not gaps:
-            return response, ["No se detectaron gaps"]
-        
-        # 2. Buscar información
-        enhanced = response.copy()
         logs = []
-        
-        for gap in gaps[:2]:  # Limitar a 2 gaps más importantes
-            try:
-                search_query = self._create_search_query(query, gap)
-                results = await self._search_multi_source(search_query)
-                
-                if results:
-                    new_data = await self._extract_info(results, gap)
-                    if new_data:
-                        enhanced.update(new_data)
-                        logs.append(f"Mejorado: {', '.join(new_data.keys())}")
-                        
-            except Exception as e:
-                logs.append(f"Error: {str(e)}")
+        enhanced = response.copy()
+
+        # Usar un gestor de contexto para la sesión de aiohttp
+        async with aiohttp.ClientSession() as session:
+            # 1. Detectar gaps
+            gaps = self._detect_gaps(response)
+            if not gaps:
+                return response, ["No se detectaron gaps"]
+            
+            # 2. Buscar información
+            for gap in gaps[:2]:  # Limitar a 2 gaps más importantes
+                try:
+                    search_query = self._create_search_query(query, gap)
+                    results = await self._search_multi_source(session, search_query)
+                    
+                    if results:
+                        new_data = await self._extract_info(session, results, gap)
+                        if new_data:
+                            enhanced.update(new_data)
+                            logs.append(f"Mejorado: {', '.join(new_data.keys())}")
+                            
+                except Exception as e:
+                    logs.append(f"Error: {str(e)}")
         
         # 3. Añadir metadatos
         if logs:
@@ -141,7 +140,29 @@ class SmartCrawler:
         
         return ' '.join(base + terms)
     
-    async def _search_multi_source(self, query: str) -> List[SearchResult]:
+    async def _search_multi_source(self, session: aiohttp.ClientSession, query: str) -> List[SearchResult]:
+        """Buscar en múltiples fuentes usando la sesión proporcionada."""
+        cache_key = hashlib.md5(query.encode()).hexdigest()
+        if cache_key in self.cache and (datetime.now() - self.cache[cache_key]['timestamp']).total_seconds() < 3600:
+            return self.cache[cache_key]['data']
+        
+        results = []
+        
+        try:
+            wiki_results = await self._search_wikipedia(session, query)
+            results.extend(wiki_results)
+        except Exception as e:
+            logger.warning(f"Error en búsqueda de Wikipedia: {e}")
+
+        if any(word in query.lower() for word in ['ubicación', 'dirección', 'donde']):
+            try:
+                geo_results = await self._search_nominatim(session, query)
+                results.extend(geo_results)
+            except Exception as e:
+                logger.warning(f"Error en búsqueda de Nominatim: {e}")
+
+        self.cache[cache_key] = {'timestamp': datetime.now(), 'data': results}
+        return results
         """Buscar en múltiples fuentes"""
         
         # Cache simple
@@ -170,21 +191,13 @@ class SmartCrawler:
         self.cache[cache_key] = results
         return results
     
-    async def _search_wikipedia(self, query: str) -> List[SearchResult]:
-        """Buscar en Wikipedia"""
-        params = {
-            'action': 'query',
-            'format': 'json',
-            'list': 'search',
-            'srsearch': f"{query} Cuba",
-            'srlimit': 3
-        }
-        
-        async with self.session.get(self.sources['wikipedia'], params=params) as resp:
+    async def _search_wikipedia(self, session: aiohttp.ClientSession, query: str) -> List[SearchResult]:
+        """Buscar en Wikipedia usando la sesión proporcionada."""
+        params = {'action': 'query', 'format': 'json', 'list': 'search', 'srsearch': f"{query} Cuba", 'srlimit': 3}
+        async with session.get(self.sources['wikipedia'], params=params) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 results = []
-                
                 for item in data.get('query', {}).get('search', []):
                     results.append(SearchResult(
                         title=item.get('title', ''),
@@ -192,26 +205,17 @@ class SmartCrawler:
                         snippet=item.get('snippet', ''),
                         score=0.8
                     ))
-                
                 return results
         return []
     
-    async def _search_nominatim(self, query: str) -> List[SearchResult]:
-        """Buscar ubicaciones"""
-        params = {
-            'q': f"{query} Cuba",
-            'format': 'json',
-            'limit': 2,
-            'countrycodes': 'cu'
-        }
-        
+    async def _search_nominatim(self, session: aiohttp.ClientSession, query: str) -> List[SearchResult]:
+        """Buscar ubicaciones usando la sesión proporcionada."""
+        params = {'q': f"{query} Cuba", 'format': 'json', 'limit': 2, 'countrycodes': 'cu'}
         headers = {'User-Agent': 'SmartCrawler/1.0'}
-        
-        async with self.session.get(self.sources['nominatim'], params=params, headers=headers) as resp:
+        async with session.get(self.sources['nominatim'], params=params, headers=headers) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 results = []
-                
                 for item in data:
                     results.append(SearchResult(
                         title=item.get('display_name', ''),
@@ -219,97 +223,75 @@ class SmartCrawler:
                         snippet=f"Lat: {item.get('lat')}, Lon: {item.get('lon')}",
                         score=0.7
                     ))
-                
                 return results
         return []
     
-    async def _extract_info(self, results: List[SearchResult], gap: ContentGap) -> Dict:
-        """Extraer información de resultados"""
+    async def _extract_info(self, session: aiohttp.ClientSession, results: List[SearchResult], gap: ContentGap) -> Dict:
+        """Extraer información de resultados usando la sesión proporcionada."""
         extracted = {}
-        
-        for result in results[:2]:  # Solo top 2
+        for result in results[:2]:
             if not result.url or 'wikipedia.org' not in result.url:
                 continue
-                
             try:
-                page_data = await self._extract_from_page(result.url)
+                page_data = await self._extract_from_page(session, result.url)
                 if page_data:
-                    # Filtrar solo campos relevantes al gap
                     relevant_data = {
                         k: v for k, v in page_data.items() 
                         if k in gap.missing_fields or gap.gap_type == 'outdated'
                     }
                     extracted.update(relevant_data)
-                    break  # Con una fuente buena es suficiente
-                    
+                    if extracted: break
             except Exception as e:
                 logger.warning(f"Error extrayendo de {result.url}: {e}")
                 continue
-        
         return extracted
     
-    async def _extract_from_page(self, url: str) -> Dict:
-        """Extraer datos estructurados de una página"""
+    async def _extract_from_page(self, session: aiohttp.ClientSession, url: str) -> Dict:
+        """Extraer datos estructurados de una página usando la sesión proporcionada."""
         try:
-            async with self.session.get(url, timeout=8) as resp:
+            async with session.get(url, timeout=8) as resp:
                 if resp.status != 200:
                     return {}
                 
                 html = await resp.text()
                 soup = BeautifulSoup(html, 'html.parser')
-                
-                # Remover elementos no útiles
                 for tag in soup(['script', 'style', 'nav', 'footer']):
                     tag.decompose()
                 
                 data = {}
                 text = soup.get_text()
                 
-                # Extraer con patrones regex
                 for field, pattern in self.patterns.items():
                     match = re.search(pattern, text, re.IGNORECASE)
                     if match:
-                        if field == 'price':
-                            data['price'] = f"{match.group(1)} {match.group(2)}"
-                        elif field == 'schedule':
-                            data['schedule'] = f"{match.group(1)} - {match.group(2)}"
-                        else:
-                            data[field] = match.group(0)
-                
-                # Extraer descripción
-                paras = soup.find_all('p')
-                for p in paras:
-                    text = p.get_text().strip()
-                    if 50 < len(text) < 300:  # Párrafo sustancial
-                        data['description'] = text
+                        if field == 'price': data['price'] = f"{match.group(1)} {match.group(2)}"
+                        elif field == 'schedule': data['schedule'] = f"{match.group(1)} - {match.group(2)}"
+                        else: data[field] = match.group(0)
+
+                for p in soup.find_all('p'):
+                    p_text = p.get_text().strip()
+                    if 50 < len(p_text) < 300:
+                        data['description'] = p_text
                         break
                 
-                # Extraer ubicación de infobox (Wikipedia)
                 infobox = soup.find('table', class_='infobox')
                 if infobox:
                     for row in infobox.find_all('tr'):
                         cells = row.find_all(['th', 'td'])
                         if len(cells) >= 2:
-                            key = cells[0].get_text().strip().lower()
-                            value = cells[1].get_text().strip()
-                            
-                            if 'ubicación' in key or 'dirección' in key:
-                                data['location'] = value
-                            elif 'horario' in key:
-                                data['schedule'] = value
-                            elif 'precio' in key or 'entrada' in key:
-                                data['price'] = value
+                            key, value = cells[0].get_text().strip().lower(), cells[1].get_text().strip()
+                            if 'ubicación' in key or 'dirección' in key: data['location'] = value
+                            elif 'horario' in key: data['schedule'] = value
+                            elif 'precio' in key or 'entrada' in key: data['price'] = value
                 
                 return data
-                
         except Exception as e:
             logger.warning(f"Error procesando página {url}: {e}")
             return {}
-    
+        
     async def close(self):
-        """Cerrar sesión"""
-        if self.session:
-            await self.session.close()
+        """Cerrar sesión """
+        pass
 
 class SimpleCrawlerIntegration:
     """Integración simplificada del crawler"""

@@ -14,6 +14,7 @@ from .base_agent import BaseAgent
 from .interfaces import IKnowledgeAgent, AgentContext, AgentType
 from ..data_managers.site_crawlers import TripAdvisorCSVCrawler, HabCulturalMuseosCrawler
 from ..data_managers.vector_store import VectorStore
+from ..data_managers.dynamic_crawler import SimpleCrawlerIntegration
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
         super().__init__(AgentType.KNOWLEDGE)
         self.data_dir = data_dir
         self.tourism_kb = None
+        self.dynamic_crawler_integration = SimpleCrawlerIntegration()
         
         # Asegurar que existen los directorios necesarios
         Path(data_dir).mkdir(parents=True, exist_ok=True)
@@ -57,35 +59,60 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
     async def process(self, context: AgentContext) -> AgentContext:
         """
         Procesa una consulta buscando información relevante.
-        
-        Args:
-            context: Contexto actual
-            
-        Returns:
-            Contexto actualizado con la información encontrada
+        Si no encuentra nada, utiliza el crawler dinámico como respaldo.
         """
         try:
-            # Buscar información en la base de conocimiento
+            # 1. Buscar información en la base de conocimiento local
             results = await self.search_knowledge(context.query)
             
-            # Actualizar contexto con los resultados
+            # 2. Si se encuentran resultados, procesarlos como antes
             if results:
                 context.metadata["knowledge"] = results
                 self.update_context_confidence(context, self._calculate_confidence(results))
                 
-                # Extraer y añadir fuentes
                 for result in results:
                     source = result.get("source", "Unknown Source")
                     self.add_source(context, str(source))
                 
-                logger.info(f"Found {len(results)} knowledge items for query: {context.query[:50]}...")
-            else:
-                logger.warning(f"No knowledge found for query: {context.query[:50]}...")
+                logger.info(f"Encontrados {len(results)} items en la KB para la consulta: {context.query[:50]}...")
             
+            # 3. Si NO se encuentran resultados, activar el crawler dinámico
+            else:
+                logger.warning(f"No se encontró conocimiento local. Activando crawler dinámico para: {context.query[:50]}...")
+                
+                # Crear una respuesta inicial vacía para que el crawler la mejore
+                initial_data = {
+                    'type': 'destination', # Tipo por defecto
+                    'name': context.query,
+                    'description': ''
+                }
+                
+                # Llamar al crawler dinámico
+                enhancement_result = await self.dynamic_crawler_integration.process_query(context.query, initial_data)
+                enhanced_response = enhancement_result.get('response', {})
+                
+                # Si el crawler encontró y mejoró la información
+                if enhancement_result.get('enhanced'):
+                    # Formatear la respuesta para que sea compatible con el resto del sistema
+                    formatted_result = {
+                        "id": enhanced_response.get('name', 'dynamic_result').replace(' ', '_').lower(),
+                        "source": "dynamic_crawler",
+                        "data": enhanced_response
+                    }
+                    context.metadata["knowledge"] = [formatted_result]
+                    self.update_context_confidence(context, enhancement_result.get('confidence', 0.8))
+                    
+                    for log in enhancement_result.get('logs', []):
+                        self.add_source(context, f"DynamicCrawler: {log}")
+                    
+                    logger.info("El crawler dinámico mejoró la respuesta.")
+                else:
+                    logger.warning("El crawler dinámico no pudo mejorar la respuesta.")
+
             return context
             
         except Exception as e:
-            self.set_error(context, f"Error searching knowledge: {str(e)}")
+            self.set_error(context, f"Error buscando conocimiento: {str(e)}")
             return context
 
     

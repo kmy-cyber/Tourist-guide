@@ -118,6 +118,8 @@ class LLMAgent(BaseAgent, ILLMAgent):
             "6. Adapta tu respuesta según sus intereses y consultas anteriores",
             "7. Si es su primera vez, dale una bienvenida especial a Cuba",
             "8. No menciones ni hagas referencia a ningún lugar que no se haya pasado en la Información disponible"
+            "9. MUY IMPORTANTE: Si la información disponible no contiene datos sobre la pregunta específica del usuario, responde honestamente que no tienes esa información en tu base de conocimientos en lugar de sugerir otros lugares. Por ejemplo: 'Lo siento, no tengo información específica sobre [lugar consultado] en mi base de datos.'"
+        # Implementar la lógica para generar la respuesta usando el modelo de lenguaje  
         ])
         
         return "\n".join(prompt_parts)

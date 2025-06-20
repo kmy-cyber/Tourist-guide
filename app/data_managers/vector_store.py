@@ -47,7 +47,7 @@ class VectorStore:
             query: str, 
             k: int = 5, 
             collections: Optional[List[str]] = None,
-            similarity_threshold: Optional[float] = None
+            similarity_threshold: Optional[float] = 0.5
         ) -> List[Dict]:
         """Search for items most similar to the query text.
 
