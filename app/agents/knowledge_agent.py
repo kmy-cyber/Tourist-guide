@@ -59,7 +59,7 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
             self.desires.append('find_info_for_query')
         
         if self.beliefs.get('new_knowledge_to_persist'):
-            self.desires.append('persist_new_knowledge') # NUEVO DESEO
+            self.desires.append('persist_new_knowledge')
         
         # Deseo proactivo: si muchas consultas han fallado, desea refrescar su conocimiento.
         if self.beliefs['failed_queries_count'] > 5:

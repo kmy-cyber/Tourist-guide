@@ -198,20 +198,40 @@ with col2:
                 )
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # Panel de Itinerario
-        if st.session_state.show_planner and context and context.itinerary:
-            with st.container():
-                st.markdown('<div class="side-panel">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">📅 ITINERARIO SUGERIDO</div>', unsafe_allow_html=True)
-                # ... (lógica para mostrar itinerario) ...
-                st.markdown('</div>', unsafe_allow_html=True)
+        # Sección del planificador
+        if st.session_state.show_planner and "itinerary" in last_message and last_message["itinerary"]:
+            try:
+                with st.container():
+                    st.markdown('<div class="side-panel pulse">', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">📅 ITINERARIO SUGERIDO</div>', unsafe_allow_html=True)
+                    
+                    # Mostrar el itinerario
+                    itinerary = last_message["itinerary"]
+                    for day in itinerary["days"]:
+                        with st.expander(f"Día {day['day']}", expanded=True):
+                            for activity in day['activities']:
+                                activity_html = f"""
+                                <div style="margin-bottom: 12px; padding: 10px; border-left: 3px solid var(--primary-color); background: rgba(var(--primary-color-rgb), 0.05);">
+                                    <div style="font-weight: 600; color: var(--primary-color);">
+                                        ⏱️ {activity['duration_hours']}h - {activity['name']}
+                                    </div>
+                                    <div style="font-size: 0.9rem; margin-top: 4px;">
+                                        {activity['description']}
+                                    </div>
+                                    {f'<div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 4px;">🏛️ {activity["location"]}</div>' if "location" in activity else ""}
+                                </div>
+                                """
+                                st.markdown(activity_html, unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+            except Exception as e:
+                logger.error(f"Error en componente del planificador: {str(e)}")
 
         # Panel del Clima
         if st.session_state.show_weather and context and context.ui_elements.get("weather_html"):
             with st.container():
                 st.markdown('<div class="side-panel">', unsafe_allow_html=True)
                 st.markdown('<div class="section-title">🌤️ CLIMA ACTUAL</div>', unsafe_allow_html=True)
-                st.components.v1.html(context.ui_elements["weather_html"], height=200)
+                st.components.v1.html(context.ui_elements["weather_html"], height=300, scrolling=False)
                 st.markdown('</div>', unsafe_allow_html=True)
 
         # Panel del Mapa

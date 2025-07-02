@@ -61,11 +61,98 @@ class UIAgent(BaseAgent, IUIAgent):
                 folium.Marker([loc['lat'], loc['lon']], popup=f"<b>{loc.get('name')}</b>", tooltip=loc.get('name')).add_to(m)
         return m._repr_html_()
 
-    async def show_weather(self, weather_info: Dict[str, Any]) -> Optional[str]:
-        if not weather_info: return None
-        # ... Lógica para generar HTML del clima ...
-        return "<div>Weather HTML</div>" # Placeholder
+    async def show_weather(self, weather_info: Dict[str, Dict[str, Any]]) -> Optional[str]:
+        """
+        Muestra información del clima formateada. Ahora espera un diccionario de diccionarios.
+        """
+        if not weather_info:
+            return None
+        
+        weather_html = ""
+        for city, info in weather_info.items():
+            # Pasa el diccionario 'info' a la función de renderizado
+            city_html = await self.show_weather_info(info)
+            if city_html:
+                weather_html += f"<div style='margin-bottom: 1rem;'>{city_html}</div>"
+        
+        if not weather_html:
+            return None
+        
+        return f"<div>{weather_html}</div>"
 
+    async def show_weather_info(self, weather_info: Dict[str, Any]) -> Optional[str]:
+        """
+        Muestra información del clima formateada a partir de un diccionario.
+        """
+        if not weather_info:
+            return None
+                
+        # CORRECCIÓN: Usar .get() para acceder a los datos del diccionario
+        ciudad = weather_info.get('city', 'N/A')
+        descripcion = weather_info.get('description', 'No disponible')
+        temperatura = weather_info.get('current_temp', 'N/A')
+        humedad = weather_info.get('humidity', 'N/A')
+        viento = weather_info.get('wind_speed', 'N/A')
+
+        # Get weather emoji based on description
+        weather_emoji = "🌤️"  # default
+        if descripcion:
+            desc_lower = descripcion.lower()
+            if "lluv" in desc_lower or "precip" in desc_lower:
+                weather_emoji = "🌧️"
+            elif "nub" in desc_lower or "nublad" in desc_lower:
+                weather_emoji = "☁️"
+            elif "sol" in desc_lower or "desp" in desc_lower:
+                weather_emoji = "☀️"
+            elif "torm" in desc_lower:
+                weather_emoji = "⛈️"
+                
+        weather_html = f"""
+        <div style="
+            padding: 1.5rem;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #00B4DB, #0083B0);
+            color: white;
+            font-family: system-ui, -apple-system, sans-serif;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        ">
+            <div style="
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 1rem;
+            ">
+                <h3 style="margin: 0; font-size: 1.5rem;">{weather_emoji} {ciudad}</h3>
+                <span style="font-size: 2rem; font-weight: bold;">{temperatura}°C</span>
+            </div>
+            <p style="
+                margin: 0.5rem 0;
+                padding: 0.5rem;
+                background: rgba(255,255,255,0.1);
+                border-radius: 5px;
+            ">{descripcion}</p>
+            <div style="
+                display: flex;
+                justify-content: space-around;
+                margin-top: 1rem;
+                text-align: center;
+            ">
+                <div>
+                    <div style="font-size: 1.5rem;">💧</div>
+                    <div style="font-size: 0.9rem;">Humedad</div>
+                    <div style="font-weight: bold;">{humedad}%</div>
+                </div>
+                <div>
+                    <div style="font-size: 1.5rem;">🌬️</div>
+                    <div style="font-size: 0.9rem;">Viento</div>
+                    <div style="font-weight: bold;">{viento} km/h</div>
+                </div>
+            </div>
+        </div>
+        """
+        
+        return weather_html
+    
     async def show_knowledge_graph(self, knowledge_items: List[Dict[str, Any]], query: str) -> Optional[str]:
         """
         Genera un grafo de conocimiento interactivo con una lógica de construcción corregida y robusta.

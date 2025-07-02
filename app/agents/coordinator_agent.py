@@ -79,7 +79,9 @@ class CoordinatorAgent(BaseAgent, ICoordinatorAgent):
             for agent_type in self.agent_execution_order:
                 if agent := self.get_agent(agent_type):
                     self.logger.debug(f"--- Running cycle for {agent.agent_type.name} ---")
-                    context = await agent.run(context)
+                    
+                    for _ in range(3):  # Intentar 3 veces antes de pasar al siguiente agente.
+                        context = await agent.run(context)
             
             # 3. Guardar la interacción final
             if user_agent := self.get_agent(AgentType.USER):
