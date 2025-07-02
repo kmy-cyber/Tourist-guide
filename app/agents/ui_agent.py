@@ -11,232 +11,119 @@ from .base_agent import BaseAgent
 
 logger = logging.getLogger(__name__)
 
+# --- Agente de UI ---
 class UIAgent(BaseAgent, IUIAgent):
-    """
-    Agente que maneja la presentación de información en la interfaz.
-    """
+    """Agente BDI para generar componentes de la interfaz de usuario."""
     
     def __init__(self):
-        """Inicializa el agente de UI"""
         super().__init__(AgentType.UI)
-        self.map_center = (21.5, -79.5)  # Centro aproximado de Cuba
-        self.map_zoom = 7
-        
-        # Configuración de colores para tipos de lugares
-        self.marker_colors = {
-            "ciudad": "red",
-            "museo": "blue",
-            "playa": "green",
-            "hotel": "purple",
-            "monumento": "orange",
-            "lugar": "darkblue"
-        }
-        
-    async def process(self, context: AgentContext) -> AgentContext:
-        """
-        Procesa el contexto para actualizar la UI.
-        """
-        try:
-            # Mostrar información del clima si está disponible
-            if context.weather_info:
-                weather_html = await self.show_weather(context.weather_info)
-                if weather_html:
-                    context.metadata["weather_html"] = weather_html
-                
-            # Mostrar mapa si hay ubicaciones
-            if context.locations:
-                map_html = await self.show_map(context.locations)
-                if map_html:
-                    context.metadata["map_html"] = map_html
-            
-            self.update_context_confidence(context, 0.9 if context.locations or context.weather_info else 0.5)
-            return context
-            
-        except Exception as e:
-            self.set_error(context, f"Error updating UI: {str(e)}")
-            return context
-            
-    def create_map(self) -> folium.Map:
-        """
-        Crea un nuevo mapa base de Cuba.
-        """
-        return folium.Map(
-            location=self.map_center,
-            zoom_start=self.map_zoom,
-            tiles="CartoDB positron",  # Estilo más limpio y moderno
-            prefer_canvas=True,  # Mejor rendimiento
-            control_scale=True,  # Añadir escala
-            width="100%",
-            height="100%"
-        )
-        
+
+    def update_beliefs(self, context: AgentContext):
+        super().update_beliefs(context)
+        self.beliefs['locations'] = context.locations
+        self.beliefs['weather_info'] = context.weather_info
+
+    def generate_desires(self):
+        self.desires = []
+        if self.beliefs.get('locations'):
+            self.desires.append('create_map')
+        if self.beliefs.get('weather_info'):
+            self.desires.append('create_weather_cards')
+
+    def generate_intentions(self):
+        self.intentions = []
+        if 'create_map' in self.desires:
+            self.intentions.append(self.intend_to_create_map)
+        if 'create_weather_cards' in self.desires:
+            self.intentions.append(self.intend_to_create_weather_cards)
+
+    async def intend_to_create_map(self, context: AgentContext) -> AgentContext:
+        self.logger.info("Executing intention: Create Map.")
+        map_html = await self.show_map(self.beliefs.get('locations', []))
+        if map_html:
+            context.ui_elements['map_html'] = map_html
+        return context
+
+    async def intend_to_create_weather_cards(self, context: AgentContext) -> AgentContext:
+        self.logger.info("Executing intention: Create Weather Cards.")
+        weather_html = await self.show_weather(self.beliefs.get('weather_info', {}))
+        if weather_html:
+            context.ui_elements['weather_html'] = weather_html
+        return context
+
     async def show_map(self, locations: List[Dict[str, Any]]) -> Optional[str]:
-        """
-        Muestra un mapa con las ubicaciones especificadas.
-        """
-        try:
-            m = self.create_map()
-            
-            for location in locations:
-                if "lat" not in location or "lon" not in location:
-                    continue
-                    
-                # Obtener color según tipo
-                color = self.marker_colors.get(
-                    location.get("type", "lugar").lower(),
-                    "gray"
-                )
-                  # Crear popup con información
-                popup_html = f"""
-                <div style="
-                    min-width: 250px;
-                    font-family: system-ui, -apple-system, sans-serif;
-                    padding: 1rem;
-                ">
-                    <h4 style="
-                        margin: 0 0 0.5rem 0;
-                        color: #1a73e8;
-                        font-size: 1.2rem;
-                    ">{location["name"]}</h4>
-                    <p style="
-                        margin: 0.5rem 0;
-                        padding: 0.3rem 0.6rem;
-                        background: #f0f3f9;
-                        border-radius: 4px;
-                        font-size: 0.9rem;
-                    "><strong>Tipo:</strong> {location.get("type", "Lugar")}</p>
-                    {f'<p style="margin: 0.5rem 0; line-height: 1.4;">{location.get("description", "")}</p>' if "description" in location else ""}
-                </div>
-                """
-                
-                # Añadir marcador
+        if not locations: return None
+        # El tileset 'CartoDB positron' es neutro y funciona bien en ambos modos.
+        # Para un modo oscuro verdadero, se podría usar 'CartoDB dark_matter'.
+        m = folium.Map(location=[21.5, -79.5], zoom_start=6, tiles="CartoDB positron")
+        for loc in locations:
+            if loc and 'lat' in loc and 'lon' in loc:
                 folium.Marker(
-                    [location["lat"], location["lon"]],
-                    popup=folium.Popup(popup_html, max_width=300),
-                    tooltip=location["name"],
-                    icon=folium.Icon(color=color, icon='info-sign')
+                    [loc['lat'], loc['lon']], 
+                    popup=f"<b>{loc.get('name', 'Ubicación')}</b>",
+                    tooltip=loc.get('name', '')
                 ).add_to(m)
-            
-            # El mapa se retorna como HTML y Streamlit lo mostrará
-            return m._repr_html_()
-            
-        except Exception as e:
-            self.logger.error(f"Error showing map: {str(e)}")
-            return self.create_fallback_html(locations)
-            
-    def create_fallback_html(self, locations: List[Dict[str, Any]]) -> str:
+        return m._repr_html_()
+
+    async def show_weather(self, weather_info: Dict[str, Any]) -> Optional[str]:
         """
-        Crea una representación HTML simple cuando el mapa no está disponible.
+        Genera el HTML para las tarjetas del clima usando variables de tema de Streamlit
+        para adaptarse a los modos claro y oscuro.
         """
-        location_list = [
-            f"• {loc['name']} ({loc.get('type', 'lugar')})"
-            for loc in locations
-        ]
-        return f"""
-        <div style="padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
-            <h3>📍 Ubicaciones mencionadas:</h3>
-            <ul>{''.join([f'<li>{loc}</li>' for loc in location_list])}</ul>
-            <small>Instala folium para ver el mapa interactivo: <code>pip install folium</code></small>
-        </div>
+        if not weather_info: return None
+        
+        # CSS que utiliza las variables de tema de Streamlit
+        style = """
+        <style>
+            .weather-card {
+                background-color: var(--background-color);
+                border: 1px solid var(--secondary-background-color);
+                color: var(--text-color);
+                border-radius: 8px;
+                padding: 15px;
+                margin-bottom: 10px;
+                font-family: var(--font);
+            }
+            .weather-city {
+                font-weight: bold;
+                font-size: 1.1em;
+                color: var(--primary-color);
+            }
+            .weather-temp {
+                font-size: 1.5em;
+                margin: 5px 0;
+            }
+            .weather-desc {
+                font-style: italic;
+            }
+            .weather-details {
+                font-size: 0.9em;
+                margin-top: 10px;
+            }
+        </style>
         """
         
-    async def show_weather(self, weather_info: Dict[str, WeatherInfo]) -> Optional[str]:
-        """
-        Muestra información del clima formateada para múltiples ubicaciones.
-        
-        Args:
-            weather_info: Diccionario con información del clima por ciudad
-        Returns:
-            str: HTML formateado con la información del clima o None si no hay datos
-        """
-        if not weather_info:
-            return None
-        
-        weather_html = ""
-        
+        cards_html = ""
         for city, info in weather_info.items():
-            city_html = await self.show_weather_info(info)
-            if city_html:
-                weather_html += f"<div style='margin-bottom: 1rem;'>{city_html}</div>"
-        
-        if not weather_html:
-            return None
-        
-        return f"""
-        <div>
-            {weather_html}
-        </div>
-        """
+            temp = info.get('current_temp', 'N/A')
+            desc = info.get('description', 'No disponible').capitalize()
+            humidity = info.get('humidity', 'N/A')
+            wind = info.get('wind_speed', 'N/A')
+            
+            emoji = "☀️"
+            if "lluvia" in desc.lower() or "rain" in desc.lower(): emoji = "🌧️"
+            elif "nube" in desc.lower() or "cloud" in desc.lower(): emoji = "☁️"
+            elif "tormenta" in desc.lower() or "storm" in desc.lower(): emoji = "⛈️"
 
-    
-    async def show_weather_info(self, weather_info: WeatherInfo) -> Optional[str]:
-        """
-        Muestra información del clima formateada.
-        """
-        if not weather_info:
-            return None
-                
-        ciudad = weather_info.city
-        descripcion = weather_info.description
-        temperatura = weather_info.current_temp
-        humedad = weather_info.humidity
-        viento = weather_info.wind_speed
-
-        # Get weather emoji based on description
-        weather_emoji = "🌤️"  # default
-        if descripcion:
-            desc_lower = descripcion.lower()
-            if "lluv" in desc_lower or "precip" in desc_lower:
-                weather_emoji = "🌧️"
-            elif "nub" in desc_lower or "nublad" in desc_lower:
-                weather_emoji = "☁️"
-            elif "sol" in desc_lower or "desp" in desc_lower:
-                weather_emoji = "☀️"
-            elif "torm" in desc_lower:
-                weather_emoji = "⛈️"
-                
-        weather_html = f"""
-        <div style="
-            padding: 1.5rem;
-            border-radius: 10px;
-            background: linear-gradient(135deg, #00B4DB, #0083B0);
-            color: white;
-            font-family: system-ui, -apple-system, sans-serif;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        ">
-            <div style="
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 1rem;
-            ">
-                <h3 style="margin: 0; font-size: 1.5rem;">{weather_emoji} {ciudad}</h3>
-                <span style="font-size: 2rem; font-weight: bold;">{temperatura}°C</span>
-            </div>
-            <p style="
-                margin: 0.5rem 0;
-                padding: 0.5rem;
-                background: rgba(255,255,255,0.1);
-                border-radius: 5px;
-            ">{descripcion}</p>
-            <div style="
-                display: flex;
-                justify-content: space-around;
-                margin-top: 1rem;
-                text-align: center;
-            ">
-                <div>
-                    <div style="font-size: 1.5rem;">💧</div>
-                    <div style="font-size: 0.9rem;">Humedad</div>
-                    <div style="font-weight: bold;">{humedad}%</div>
-                </div>
-                <div>
-                    <div style="font-size: 1.5rem;">🌬️</div>
-                    <div style="font-size: 0.9rem;">Viento</div>
-                    <div style="font-weight: bold;">{viento} km/h</div>
+            cards_html += f"""
+            <div class="weather-card">
+                <div class="weather-city">{city} {emoji}</div>
+                <div class="weather-temp">{temp}°C</div>
+                <div class="weather-desc">{desc}</div>
+                <div class="weather-details">
+                    <span>💧 Humedad: {humidity}%</span> | <span>💨 Viento: {wind} km/h</span>
                 </div>
             </div>
-        </div>
-        """
+            """
         
-        return weather_html
+        return f"<div>{style}{cards_html}</div>"
