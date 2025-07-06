@@ -6,155 +6,71 @@ import logging
 from typing import Dict, List, Any, Optional
 from app.weather.weather import WeatherInfo
 import folium
+from pyvis.network import Network
 from .interfaces import IUIAgent, AgentContext, AgentType
 from .base_agent import BaseAgent
 
 logger = logging.getLogger(__name__)
 
+# --- Agente de UI (con Grafo de Conocimiento Mejorado) ---
 class UIAgent(BaseAgent, IUIAgent):
-    """
-    Agente que maneja la presentación de información en la interfaz.
-    """
+    """Agente BDI para generar componentes de la interfaz de usuario."""
     
     def __init__(self):
-        """Inicializa el agente de UI"""
         super().__init__(AgentType.UI)
-        self.map_center = (21.5, -79.5)  # Centro aproximado de Cuba
-        self.map_zoom = 7
-        
-        # Configuración de colores para tipos de lugares
-        self.marker_colors = {
-            "ciudad": "red",
-            "museo": "blue",
-            "playa": "green",
-            "hotel": "purple",
-            "monumento": "orange",
-            "lugar": "darkblue"
-        }
-        
-    async def process(self, context: AgentContext) -> AgentContext:
-        """
-        Procesa el contexto para actualizar la UI.
-        """
-        try:
-            # Mostrar información del clima si está disponible
-            if context.weather_info:
-                weather_html = await self.show_weather(context.weather_info)
-                if weather_html:
-                    context.metadata["weather_html"] = weather_html
-                
-            # Mostrar mapa si hay ubicaciones
-            if context.locations:
-                map_html = await self.show_map(context.locations)
-                if map_html:
-                    context.metadata["map_html"] = map_html
-            
-            self.update_context_confidence(context, 0.9 if context.locations or context.weather_info else 0.5)
-            return context
-            
-        except Exception as e:
-            self.set_error(context, f"Error updating UI: {str(e)}")
-            return context
-            
-    def create_map(self) -> folium.Map:
-        """
-        Crea un nuevo mapa base de Cuba.
-        """
-        return folium.Map(
-            location=self.map_center,
-            zoom_start=self.map_zoom,
-            tiles="CartoDB positron",  # Estilo más limpio y moderno
-            prefer_canvas=True,  # Mejor rendimiento
-            control_scale=True,  # Añadir escala
-            width="100%",
-            height="100%"
-        )
-        
+
+    def update_beliefs(self, context: AgentContext):
+        super().update_beliefs(context)
+        self.beliefs['locations'] = context.locations
+        self.beliefs['weather_info'] = context.weather_info
+        self.beliefs['knowledge'] = context.knowledge
+        self.beliefs['query'] = context.query
+
+    def generate_desires(self):
+        self.desires = []
+        if self.beliefs.get('locations'): self.desires.append('create_map')
+        if self.beliefs.get('weather_info'): self.desires.append('create_weather_cards')
+        if self.beliefs.get('knowledge'): self.desires.append('create_knowledge_graph')
+
+    def generate_intentions(self):
+        self.intentions = []
+        if 'create_map' in self.desires: self.intentions.append(self.intend_to_create_map)
+        if 'create_weather_cards' in self.desires: self.intentions.append(self.intend_to_create_weather_cards)
+        if 'create_knowledge_graph' in self.desires: self.intentions.append(self.intend_to_create_knowledge_graph)
+
+    async def intend_to_create_map(self, context: AgentContext) -> AgentContext:
+        map_html = await self.show_map(self.beliefs.get('locations', []))
+        if map_html: context.ui_elements['map_html'] = map_html
+        return context
+
+    async def intend_to_create_weather_cards(self, context: AgentContext) -> AgentContext:
+        weather_html = await self.show_weather(self.beliefs.get('weather_info', {}))
+        if weather_html: context.ui_elements['weather_html'] = weather_html
+        return context
+
+    async def intend_to_create_knowledge_graph(self, context: AgentContext) -> AgentContext:
+        graph_html = await self.show_knowledge_graph(self.beliefs.get('knowledge', []), self.beliefs.get('query'))
+        if graph_html: context.ui_elements['knowledge_graph_html'] = graph_html
+        return context
+
     async def show_map(self, locations: List[Dict[str, Any]]) -> Optional[str]:
+        if not locations: return None
+        m = folium.Map(location=[21.5, -79.5], zoom_start=6, tiles="CartoDB positron")
+        for loc in locations:
+            if loc and 'lat' in loc and 'lon' in loc:
+                folium.Marker([loc['lat'], loc['lon']], popup=f"<b>{loc.get('name')}</b>", tooltip=loc.get('name')).add_to(m)
+        return m._repr_html_()
+
+    async def show_weather(self, weather_info: Dict[str, Dict[str, Any]]) -> Optional[str]:
         """
-        Muestra un mapa con las ubicaciones especificadas.
-        """
-        try:
-            m = self.create_map()
-            
-            for location in locations:
-                if "lat" not in location or "lon" not in location:
-                    continue
-                    
-                # Obtener color según tipo
-                color = self.marker_colors.get(
-                    location.get("type", "lugar").lower(),
-                    "gray"
-                )
-                  # Crear popup con información
-                popup_html = f"""
-                <div style="
-                    min-width: 250px;
-                    font-family: system-ui, -apple-system, sans-serif;
-                    padding: 1rem;
-                ">
-                    <h4 style="
-                        margin: 0 0 0.5rem 0;
-                        color: #1a73e8;
-                        font-size: 1.2rem;
-                    ">{location["name"]}</h4>
-                    <p style="
-                        margin: 0.5rem 0;
-                        padding: 0.3rem 0.6rem;
-                        background: #f0f3f9;
-                        border-radius: 4px;
-                        font-size: 0.9rem;
-                    "><strong>Tipo:</strong> {location.get("type", "Lugar")}</p>
-                    {f'<p style="margin: 0.5rem 0; line-height: 1.4;">{location.get("description", "")}</p>' if "description" in location else ""}
-                </div>
-                """
-                
-                # Añadir marcador
-                folium.Marker(
-                    [location["lat"], location["lon"]],
-                    popup=folium.Popup(popup_html, max_width=300),
-                    tooltip=location["name"],
-                    icon=folium.Icon(color=color, icon='info-sign')
-                ).add_to(m)
-            
-            # El mapa se retorna como HTML y Streamlit lo mostrará
-            return m._repr_html_()
-            
-        except Exception as e:
-            self.logger.error(f"Error showing map: {str(e)}")
-            return self.create_fallback_html(locations)
-            
-    def create_fallback_html(self, locations: List[Dict[str, Any]]) -> str:
-        """
-        Crea una representación HTML simple cuando el mapa no está disponible.
-        """
-        location_list = [
-            f"• {loc['name']} ({loc.get('type', 'lugar')})"
-            for loc in locations
-        ]
-        return f"""
-        <div style="padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
-            <h3>📍 Ubicaciones mencionadas:</h3>
-            <ul>{''.join([f'<li>{loc}</li>' for loc in location_list])}</ul>
-            <small>Instala folium para ver el mapa interactivo: <code>pip install folium</code></small>
-        </div>
-        """
-        
-    async def show_weather(self, weather_info: Dict[str, WeatherInfo]) -> Optional[str]:
-        """
-        Muestra información del clima formateada para múltiples ubicaciones.
-        
-        Args:
-            weather_info: Diccionario con información del clima por ciudad
-        Returns:
-            str: HTML formateado con la información del clima o None si no hay datos
+        Muestra información del clima formateada. Ahora espera un diccionario de diccionarios.
         """
         if not weather_info:
             return None
         
         weather_html = ""
-        
         for city, info in weather_info.items():
+            # Pasa el diccionario 'info' a la función de renderizado
             city_html = await self.show_weather_info(info)
             if city_html:
                 weather_html += f"<div style='margin-bottom: 1rem;'>{city_html}</div>"
@@ -162,25 +78,21 @@ class UIAgent(BaseAgent, IUIAgent):
         if not weather_html:
             return None
         
-        return f"""
-        <div>
-            {weather_html}
-        </div>
-        """
+        return f"<div>{weather_html}</div>"
 
-    
-    async def show_weather_info(self, weather_info: WeatherInfo) -> Optional[str]:
+    async def show_weather_info(self, weather_info: Dict[str, Any]) -> Optional[str]:
         """
-        Muestra información del clima formateada.
+        Muestra información del clima formateada a partir de un diccionario.
         """
         if not weather_info:
             return None
                 
-        ciudad = weather_info.city
-        descripcion = weather_info.description
-        temperatura = weather_info.current_temp
-        humedad = weather_info.humidity
-        viento = weather_info.wind_speed
+        # CORRECCIÓN: Usar .get() para acceder a los datos del diccionario
+        ciudad = weather_info.get('city', 'N/A')
+        descripcion = weather_info.get('description', 'No disponible')
+        temperatura = weather_info.get('current_temp', 'N/A')
+        humedad = weather_info.get('humidity', 'N/A')
+        viento = weather_info.get('wind_speed', 'N/A')
 
         # Get weather emoji based on description
         weather_emoji = "🌤️"  # default
@@ -240,3 +152,67 @@ class UIAgent(BaseAgent, IUIAgent):
         """
         
         return weather_html
+    
+    async def show_knowledge_graph(self, knowledge_items: List[Dict[str, Any]], query: str) -> Optional[str]:
+        """
+        Genera un grafo de conocimiento interactivo con una lógica de construcción corregida y robusta.
+        """
+        if not knowledge_items:
+            self.logger.warning("No se recibieron items de conocimiento para construir el grafo.")
+            return None
+
+        self.logger.info(f"Construyendo grafo con {len(knowledge_items)} items de conocimiento.")
+
+        try:
+            net = Network(height="510px", width="100%", notebook=True, cdn_resources='in_line', directed=True)
+            net.set_options("""
+            var options = {
+              "nodes": {
+                "font": { "color": "var(--text-color)", "strokeWidth": 3, "strokeColor": "var(--background-color)" },
+                "scaling": { "min": 15, "max": 35 },
+                "shape": "dot"
+              },
+              "edges": {
+                "color": { "inherit": "to", "opacity": 0.5 },
+                "smooth": { "type": "dynamic" }
+              },
+              "physics": { "enabled": true, "barnesHut": { "gravitationalConstant": -8000 } }
+            }
+            """)
+
+            net.add_node(query, label=query, size=35, color="#FF5733", title=f"Consulta: '{query}'")
+            added_nodes = {query}
+
+            for item in knowledge_items:
+                # CORRECCIÓN: Extraer los datos de la clave 'metadata' en lugar de 'data'.
+                data = item.get('metadata')
+                if not isinstance(data, dict):
+                    self.logger.warning(f"Item de conocimiento saltado por formato de 'metadata' incorrecto: {item}")
+                    continue
+
+                item_id = data.get('id', data.get('name'))
+                item_name = data.get('name')
+                item_type = data.get('type', 'desconocido')
+                
+                if not item_id or not item_name:
+                    continue
+
+                if item_id not in added_nodes:
+                    net.add_node(item_id, label=item_name, title=f"Tipo: {item_type}", group=item_type, size=20)
+                    added_nodes.add(item_id)
+                
+                net.add_edge(query, item_id, title="resultado de")
+
+                location_info = data.get('location')
+                if isinstance(location_info, dict) and (loc_name := location_info.get('name')):
+                    if loc_name not in added_nodes:
+                        net.add_node(loc_name, label=loc_name, title="Ubicación", group="location", shape="box", color="#4169E1", size=15)
+                        added_nodes.add(loc_name)
+                    net.add_edge(item_id, loc_name, title="ubicado en")
+
+            self.logger.info(f"Grafo de conocimiento creado con {len(net.nodes)} nodos y {len(net.edges)} aristas.")
+            return net.generate_html(name='knowledge_graph.html', local=True)
+
+        except Exception as e:
+            self.logger.error(f"Falló la creación del grafo de conocimiento: {e}", exc_info=True)
+            return None

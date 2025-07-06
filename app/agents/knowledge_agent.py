@@ -1,147 +1,165 @@
 """
-Agente de conocimiento simplificado y optimizado.
+Agente de conocimiento proactivo bajo el modelo BDI.
 Maneja la búsqueda y actualización de la base de conocimiento turístico.
 """
-import os
-import asyncio
 import logging
-import shutil
-from typing import List, Dict, Any, Optional
-from datetime import datetime
-from pathlib import Path
+from typing import List, Dict, Any
 
 from .base_agent import BaseAgent
 from .interfaces import IKnowledgeAgent, AgentContext, AgentType
-from ..data_managers.site_crawlers import TripAdvisorCSVCrawler, HabCulturalMuseosCrawler
-from ..data_managers.vector_store import VectorStore
+from ..knowledge_base import TourismKB
 from ..data_managers.dynamic_crawler import SimpleCrawlerIntegration
 
 logger = logging.getLogger(__name__)
 
 class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
-    """Agente de conocimiento simplificado y eficiente"""
+    """
+    Agente de conocimiento proactivo.
+    - Creencias: Estado de la KB, consultas sin respuesta.
+    - Deseos: Encontrar información relevante, mantener la KB completa.
+    - Intenciones: Buscar en la KB, usar crawler, refrescar la KB.
+    """
     
     def __init__(self, data_dir: str):
-        """
-        Inicializa el agente de conocimiento.
-        
-        Args:
-            data_dir: Directorio base de datos
-        """
         super().__init__(AgentType.KNOWLEDGE)
         self.data_dir = data_dir
-        self.tourism_kb = None
-        self.dynamic_crawler_integration = SimpleCrawlerIntegration()
+        self.tourism_kb: TourismKB = None
+        self.dynamic_crawler = SimpleCrawlerIntegration()
         
-        # Asegurar que existen los directorios necesarios
-        Path(data_dir).mkdir(parents=True, exist_ok=True)
-        Path(data_dir, 'vectors').mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"KnowledgeAgent initialized with data directory: {data_dir}")
+        # Creencias iniciales
+        self.beliefs['is_kb_initialized'] = False
+        self.beliefs['failed_queries_count'] = 0
 
     async def initialize(self) -> None:
-        """Inicializa el agente y su base de conocimiento"""
+        """Inicializa la base de conocimiento."""
         try:
-            logger.info("Initializing KnowledgeAgent...")
-            
-            # Importar e inicializar TourismKB simplificado
-            from ..knowledge_base import TourismKB
             self.tourism_kb = TourismKB(self.data_dir)
-            
-            # Verificar si necesita datos iniciales
-            await self._ensure_initial_data()
-            
-            logger.info("KnowledgeAgent initialized successfully")
+            # Aquí podrías añadir una verificación de si la KB está vacía
+            self.beliefs['is_kb_initialized'] = True
+            logger.info("KnowledgeAgent initialized successfully.")
         except Exception as e:
             logger.error(f"Error initializing KnowledgeAgent: {str(e)}")
             raise
 
-    async def process(self, context: AgentContext) -> AgentContext:
+    # --- Implementación del Ciclo BDI ---
+
+    def update_beliefs(self, context: AgentContext):
+        """El agente percibe el contexto y actualiza sus creencias."""
+        super().update_beliefs(context) # Hereda la actualización básica
+        if context.knowledge_gap_detected:
+            self.beliefs['failed_queries_count'] += 1
+        
+        self.beliefs['new_knowledge_to_persist'] = context.metadata.get('new_knowledge')
+
+    def generate_desires(self):
+        """Basado en sus creencias, el agente decide qué quiere lograr."""
+        self.desires = []
+        # Deseo principal: si hay una consulta, encontrar información para ella.
+        if self.beliefs.get('current_query'):
+            self.desires.append('find_info_for_query')
+        
+        if self.beliefs.get('new_knowledge_to_persist'):
+            self.desires.append('persist_new_knowledge')
+        
+        # Deseo proactivo: si muchas consultas han fallado, desea refrescar su conocimiento.
+        if self.beliefs['failed_queries_count'] > 5:
+            self.desires.append('refresh_knowledge_base')
+
+    def generate_intentions(self):
+        """El agente se compromete a un plan de acción para cumplir sus deseos."""
+        self.intentions = []
+        if 'find_info_for_query' in self.desires:
+            self.intentions.append(self.intend_to_search_and_enhance)
+        if 'persist_new_knowledge' in self.desires:
+            self.intentions.append(self.intend_to_persist_knowledge) # NUEVA INTENCIÓN
+        if 'refresh_knowledge_base' in self.desires:
+            self.intentions.append(self.intend_to_refresh_knowledge)
+
+    # --- Implementación de las Intenciones (Acciones) ---
+
+    async def intend_to_search_and_enhance(self, context: AgentContext) -> AgentContext:
         """
-        Procesa una consulta buscando información relevante.
-        Si no encuentra nada, utiliza el crawler dinámico como respaldo.
+        Intención: Buscar en la KB local y, si no se encuentra nada,
+        usar el crawler dinámico para "mejorar" el conocimiento sobre la marcha.
         """
-        try:
-            # 1. Buscar información en la base de conocimiento local
-            results = await self.search_knowledge(context.query)
+        query = context.query
+        if not query:
+            return context
+
+        self.logger.info(f"Executing intention: Search knowledge for '{query[:50]}...'")
+        results = await self.search_knowledge(query)
+        
+        if results:
+            context.knowledge = results
+            self.update_context_confidence(context, self._calculate_confidence(results))
+            for result in results:
+                self.add_source(context, result.get("source", "Unknown Source"))
+            self.logger.info(f"Found {len(results)} items in local KB.")
+        else:
+            self.logger.warning("No local knowledge found. Activating dynamic crawler.")
+            # Crear una respuesta vacía para que el crawler la mejore
+            initial_data = {'type': 'destination', 'name': query, 'description': ''}
+            enhancement_result = await self.dynamic_crawler.process_query(query, initial_data)
             
-            # 2. Si se encuentran resultados, procesarlos como antes
-            if results:
-                context.metadata["knowledge"] = results
-                self.update_context_confidence(context, self._calculate_confidence(results))
-                
-                for result in results:
-                    source = result.get("source", "Unknown Source")
-                    self.add_source(context, str(source))
-                
-                logger.info(f"Encontrados {len(results)} items en la KB para la consulta: {context.query[:50]}...")
-            
-            # 3. Si NO se encuentran resultados, activar el crawler dinámico
-            else:
-                logger.warning(f"No se encontró conocimiento local. Activando crawler dinámico para: {context.query[:50]}...")
-                
-                # Crear una respuesta inicial vacía para que el crawler la mejore
-                initial_data = {
-                    'type': 'destination', # Tipo por defecto
-                    'name': context.query,
-                    'description': ''
+            if enhancement_result.get('enhanced'):
+                enhanced_data = enhancement_result.get('response', {})
+                formatted_result = {
+                    "id": enhanced_data.get('name', 'dynamic_result').replace(' ', '_').lower(),
+                    "source": "dynamic_crawler",
+                    "data": enhanced_data
                 }
-                
-                # Llamar al crawler dinámico
-                enhancement_result = await self.dynamic_crawler_integration.process_query(context.query, initial_data)
-                enhanced_response = enhancement_result.get('response', {})
-                
-                # Si el crawler encontró y mejoró la información
-                if enhancement_result.get('enhanced'):
-                    # Formatear la respuesta para que sea compatible con el resto del sistema
-                    formatted_result = {
-                        "id": enhanced_response.get('name', 'dynamic_result').replace(' ', '_').lower(),
-                        "source": "dynamic_crawler",
-                        "data": enhanced_response
-                    }
-                    context.metadata["knowledge"] = [formatted_result]
-                    self.update_context_confidence(context, enhancement_result.get('confidence', 0.8))
-                    
-                    for log in enhancement_result.get('logs', []):
-                        self.add_source(context, f"DynamicCrawler: {log}")
-                    
-                    logger.info("El crawler dinámico mejoró la respuesta.")
-                else:
-                    logger.warning("El crawler dinámico no pudo mejorar la respuesta.")
 
+                context.knowledge.append(formatted_result)
+                
+                # Marca la información como "nueva" en los metadatos para que la recoja en el próximo ciclo.
+                context.metadata['new_knowledge'] = [formatted_result]
+
+                self.update_context_confidence(context, enhancement_result.get('confidence', 0.8))
+                self.logger.info("Dynamic crawler enhanced the response.")
+            else:
+                context.knowledge_gap_detected = True
+                self.logger.warning("Dynamic crawler could not find new information.")
+
+        return context
+
+    async def intend_to_persist_knowledge(self, context: AgentContext) -> AgentContext:
+        """
+        NUEVA INTENCIÓN: Persiste el nuevo conocimiento en la KB híbrida.
+        """
+        new_knowledge = self.beliefs.get('new_knowledge_to_persist')
+        if not new_knowledge:
             return context
-            
+
+        self.logger.info(f"Ejecutando intención: Persistiendo {len(new_knowledge)} nuevo(s) item(s) de conocimiento.")
+        try:
+            self.tourism_kb.update_kb(new_knowledge)
+            self.logger.info("Nuevo conocimiento persistido correctamente en la KB híbrida.")
+            context.metadata.pop('new_knowledge', None) # Limpiar para no repetir
         except Exception as e:
-            self.set_error(context, f"Error buscando conocimiento: {str(e)}")
-            return context
+            self.logger.error(f"Falló la intención de persistir conocimiento: {e}")
+        
+        return context
 
-    
+    async def intend_to_refresh_knowledge(self, context: AgentContext) -> AgentContext:
+        """
+        Intención proactiva: Refrescar la base de conocimiento completa
+        porque se han detectado demasiadas brechas de información.
+        """
+        self.logger.info("Executing proactive intention: Refreshing knowledge base.")
+        try:
+            await self.refresh_knowledge()
+            self.beliefs['failed_queries_count'] = 0  # Reiniciar el contador
+            self.logger.info("Knowledge base refreshed successfully.")
+        except Exception as e:
+            self.logger.error(f"Failed to execute intention to refresh knowledge: {e}")
+        return context
+
+    # --- Métodos de soporte (sin cambios) ---
 
     async def search_knowledge(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """
-        Busca información relevante en la base de conocimiento.
-        
-        Args:
-            query: Consulta a buscar
-            limit: Límite de resultados
-            
-        Returns:
-            Lista de resultados encontrados
-        """
-        try:
-            if not self.tourism_kb:
-                logger.warning("TourismKB not initialized, returning empty results")
-                return []
-            
-            # Realizar búsqueda semántica
-            results = await self.tourism_kb.search(query, limit=limit)
-            
-            logger.info(f"Knowledge search returned {len(results)} results for: '{query}'")
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error during knowledge search: {str(e)}")
-            return []
+        # El código de este método no necesita cambios
+        if not self.tourism_kb: return []
+        return await self.tourism_kb.search(query, limit=limit)
 
     async def refresh_knowledge(self) -> None:
         """
@@ -159,7 +177,7 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
                 return
                 
             # 2. Procesar y validar los datos
-            processed_items = self._process_raw_data(fresh_data)
+            processed_items = fresh_data
             
             if not processed_items:
                 logger.warning("No valid items after processing")
@@ -543,7 +561,6 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
                 
         except Exception as e:
             logger.error(f"Error ensuring initial data: {str(e)}")
-            # No es crítico, el sistema puede funcionar sin datos iniciales
 
     def _calculate_confidence(self, results: List[Dict[str, Any]]) -> float:
         """

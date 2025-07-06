@@ -7,6 +7,7 @@ import asyncio
 import aiohttp
 import json
 import re
+import os
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
@@ -37,6 +38,10 @@ class SmartCrawler:
     """Agente crawler inteligente simplificado"""
     
     def __init__(self):
+        self.save_dir = os.path.join(os.path.dirname(__file__), "..", "data", "dynamic_raw")
+        os.makedirs(self.save_dir, exist_ok=True)
+        logger.info(f"Directorio de guardado para SmartCrawler: {self.save_dir}")
+
         # Configuración de fuentes
         self.sources = {
             'google': 'https://www.googleapis.com/customsearch/v1',
@@ -61,11 +66,27 @@ class SmartCrawler:
         self.session = None
         self.cache = {}
     
+    def _save_data(self, data: Dict):
+        """Guarda la información mejorada en un archivo JSON."""
+        try:
+            item_name = data.get('name', 'unknown').replace(' ', '_').lower()
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"dynamic_crawl_{item_name}_{timestamp}.json"
+            filepath = os.path.join(self.save_dir, filename)
+            
+            item_to_save = {"id": item_name, "data": data}
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(item_to_save, f, ensure_ascii=False, indent=2)
+            logger.info(f"Datos nuevos guardados exitosamente en {filepath}")
+        except Exception as e:
+            logger.error(f"Error al guardar los datos dinámicos: {e}")
+
     async def enhance_response(self, query: str, response: Dict) -> Tuple[Dict, List[str]]:
         """Mejorar respuesta automáticamente gestionando la sesión por consulta."""
         
         logs = []
         enhanced = response.copy()
+        initial_data_hash = hashlib.md5(json.dumps(response, sort_keys=True).encode()).hexdigest()
 
         # Usar un gestor de contexto para la sesión de aiohttp
         async with aiohttp.ClientSession() as session:
@@ -95,6 +116,11 @@ class SmartCrawler:
                 'timestamp': datetime.now().isoformat(),
                 'improvements': logs
             }
+        
+        # Si la respuesta fue mejorada, guardarla en un archivo
+        final_data_hash = hashlib.md5(json.dumps(enhanced, sort_keys=True).encode()).hexdigest()
+        if initial_data_hash != final_data_hash:
+            self._save_data(enhanced)
         
         return enhanced, logs
     
@@ -315,7 +341,7 @@ class SimpleCrawlerIntegration:
         try:
             enhanced_response, logs = await self.crawler.enhance_response(query, response)
             
-            was_enhanced = '_enhanced' in enhanced_response
+            was_enhanced = '_enhanced' not in enhanced_response
             if was_enhanced:
                 self.stats['enhanced'] += 1
             

@@ -177,6 +177,8 @@ class VectorStore:
 
     def add_items(self, items: List[Dict]):
         """Add or update items in appropriate collections"""
+        processed_items = []
+
         for item in items:
             try:
                 # Determinar la colección basada en el tipo de item
@@ -196,9 +198,12 @@ class VectorStore:
                 
                 # Guardar en la colección apropiada
                 self._save_item(collection, item)
+                processed_items.append(item)
                 
             except Exception as e:
                 logger.error(f"Error adding item {item.get('id', 'unknown')}: {str(e)}")
+        
+        return processed_items
 
     def store(self, collection: str, items: List[Dict], regenerate_embeddings: bool = False):
         """Store items in the vector store, optionally regenerating embeddings"""

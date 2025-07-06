@@ -8,55 +8,57 @@ from .base_agent import BaseAgent
 from .interfaces import IWeatherAgent, AgentContext, AgentType
 from ..weather.weather_service import WeatherService
 
+# --- Agente del Clima ---
 class WeatherAgent(BaseAgent, IWeatherAgent):
-    """Agente que maneja la información del clima"""
+    """Agente BDI para obtener información del clima."""
     
     def __init__(self):
-        """Inicializa el agente del clima"""
         super().__init__(AgentType.WEATHER)
         self.weather_service = WeatherService()
-        
-    async def process(self, context: AgentContext) -> AgentContext:
+
+    def update_beliefs(self, context: AgentContext):
+        super().update_beliefs(context)
+        self.beliefs['locations'] = context.locations
+
+    def generate_desires(self):
+        self.desires = []
+        if self.beliefs.get('locations'):
+            self.desires.append('fetch_weather_for_locations')
+
+    def generate_intentions(self):
+        self.intentions = []
+        if 'fetch_weather_for_locations' in self.desires:
+            self.intentions.append(self.intend_to_fetch_weather)
+
+    async def intend_to_fetch_weather(self, context: AgentContext) -> AgentContext:
+        self.logger.info("Executing intention: Fetch Weather.")
+        weather_info = {}
+        for loc in self.beliefs.get('locations', []):
+            city_name = loc.get('name')
+            if city_name:
+                weather_dict = await self.get_weather(city_name)
+                if weather_dict:
+                    weather_info[city_name] = weather_dict
+        context.weather_info = weather_info
+        return context
+
+    async def get_weather(self, location: str) -> Optional[Dict[str, Any]]:
         """
-        Procesa el contexto para obtener información del clima.
-        
-        Args:
-            context: Contexto actual
-            
-        Returns:
-            Contexto actualizado con información del clima
-        """
-        try:
-            # Obtener información del clima para cada ubicación
-            for location in context.locations:
-                weather_info = await self.get_weather(location["name"])
-                if weather_info:
-                    context.weather_info[location["name"]] = weather_info
-                    self.add_source(context, f"OpenWeather - {location['name']}")
-            
-            if context.weather_info:
-                self.update_context_confidence(context, 0.8, weight=0.3)
-            
-            return context
-            
-        except Exception as e:
-            self.set_error(context, f"Error getting weather: {str(e)}")
-            return context
-            
-    async def get_weather(self, location: str) -> Optional[WeatherInfo]:
-        """
-        Obtiene información del clima para una ubicación.
-        
-        Args:
-            location: Nombre de la ubicación
-            
-        Returns:
-            Información del clima o None si no se encuentra
+        Obtiene el clima y se asegura de devolver un diccionario simple.
         """
         try:
-            if weather_report := await self.weather_service.get_weather_async(location):
-                return weather_report
+            report: Optional[WeatherInfo] = await self.weather_service.get_weather_async(location)
+            if report:
+                # CORRECCIÓN: Convertir explícitamente el objeto WeatherInfo a un diccionario.
+                return {
+                    "city": report.city,
+                    "current_temp": report.current_temp,
+                    "feels_like": report.feels_like,
+                    "description": report.description,
+                    "humidity": report.humidity,
+                    "wind_speed": report.wind_speed,
+                    "timestamp": report.timestamp.isoformat()
+                }
         except Exception as e:
-            self.logger.warning(f"Error getting weather for {location}: {str(e)}")
-            
+            self.logger.warning(f"Could not get weather for {location}: {e}")
         return None

@@ -4,7 +4,7 @@ Define los contratos que deben cumplir los diferentes agentes.
 """
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Protocol
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 
 class AgentType(Enum):
@@ -21,28 +21,29 @@ class AgentType(Enum):
 @dataclass
 class AgentContext:
     """
-    Contexto compartido entre agentes.
+    Contexto compartido entre agentes (el "mundo" o "pizarra").
     Contiene toda la información necesaria para procesar una consulta.
+    Los agentes leen y escriben en este objeto para colaborar.
     """
     query: str
+    user_id: str = "default_user"
     confidence: float = 0.5
-    sources: List[str] = None
-    metadata: Dict[str, Any] = None
-    locations: List[Dict[str, Any]] = None
-    weather_info: Dict[str, Any] = None
-    response: Optional[str] = None
-    error: Optional[str] = None
-
-    user_preferences: Dict[str, Any] = None
+    sources: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    # Datos específicos que los agentes producen
+    knowledge: List[Dict[str, Any]] = field(default_factory=list)
+    locations: List[Dict[str, Any]] = field(default_factory=list)
+    weather_info: Dict[str, Any] = field(default_factory=dict)
     itinerary: Optional[Dict[str, Any]] = None
-    planning_mode: bool = False
-
-    def __post_init__(self):
-        self.sources = self.sources or []
-        self.metadata = self.metadata or {}
-        self.locations = self.locations or []
-        self.weather_info = self.weather_info or {}
-        self.user_preferences = self.user_preferences or {}
+    
+    # Salida final
+    response: Optional[str] = None
+    ui_elements: Dict[str, Any] = field(default_factory=dict)
+    
+    # Estado y errores
+    error: Optional[str] = None
+    knowledge_gap_detected: bool = False # Para que el KnowledgeAgent sepa si debe buscar fuera
 
 class IAgent(Protocol):
     """
@@ -54,8 +55,18 @@ class IAgent(Protocol):
         """Tipo del agente"""
         ...
 
+    async def run(self, context: AgentContext) -> AgentContext:
+        """
+        Ejecuta el ciclo de vida proactivo del agente (BDI).
+        Este es el nuevo método principal de ejecución.
+        """
+        ...
+
     async def process(self, context: AgentContext) -> AgentContext:
-        """Procesa el contexto y retorna un contexto actualizado"""
+        """
+        Procesa el contexto y retorna un contexto actualizado.
+        Puede delegar en `run` para mantener la compatibilidad.
+        """
         ...
 
     async def initialize(self) -> None:
@@ -66,107 +77,43 @@ class IAgent(Protocol):
         """Limpia recursos del agente si es necesario"""
         ...
 
-class ICoordinatorAgent(IAgent):
-    """Protocolo para el agente coordinador"""
-    
-    def register_agent(self, agent: IAgent) -> None:
-        """Registra un nuevo agente en el sistema"""
-        ...
+# El resto de las interfaces (ICoordinatorAgent, IKnowledgeAgent, etc.) no necesitan
+# cambios ya que heredan de IAgent y sus métodos específicos no se ven afectados
+# por el cambio de arquitectura interna del agente.
 
-    async def get_response(self, query: str) -> AgentContext:
-        """Procesa una consulta completa coordinando múltiples agentes"""
-        ...
+class ICoordinatorAgent(IAgent):
+    """Protocolo para el agente coordinador (ahora EnvironmentManager)"""
+    def register_agent(self, agent: IAgent) -> None: ...
+    async def get_response(self, query: str) -> AgentContext: ...
 
 class IKnowledgeAgent(IAgent):
     """Protocolo para agentes que manejan conocimiento"""
-    
-    async def search_knowledge(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
-        """Busca información relevante en la base de conocimiento"""
-        ...
-
-    async def refresh_knowledge(self) -> None:
-        """Actualiza la base de conocimiento"""
-        ...
+    async def search_knowledge(self, query: str, limit: int = 3) -> List[Dict[str, Any]]: ...
+    async def refresh_knowledge(self) -> None: ...
 
 class IWeatherAgent(IAgent):
     """Protocolo para agentes que manejan información del clima"""
-    
-    async def get_weather(self, location: str) -> Optional[Dict[str, Any]]:
-        """Obtiene información del clima para una ubicación"""
-        ...
+    async def get_weather(self, location: str) -> Optional[Dict[str, Any]]: ...
 
 class ILocationAgent(IAgent):
     """Protocolo para agentes que manejan ubicaciones"""
-    
-    async def extract_locations(self, text: str) -> List[Dict[str, Any]]:
-        """Extrae ubicaciones mencionadas en un texto"""
-        ...
-
-    async def get_coordinates(self, location: str) -> Optional[Dict[str, float]]:
-        """Obtiene coordenadas para una ubicación"""
-        ...
+    async def extract_locations(self, text: str) -> List[Dict[str, Any]]: ...
+    async def get_coordinates(self, location: str) -> Optional[Dict[str, float]]: ...
 
 class ILLMAgent(IAgent):
     """Protocolo para agentes que manejan modelos de lenguaje"""
-    
-    async def generate_response(
-        self, 
-        system_prompt: str, 
-        user_prompt: str,
-        context: Dict[str, Any] = None
-    ) -> str:
-        """Genera una respuesta usando el modelo de lenguaje"""
-        ...
+    async def generate_response(self, system_prompt: str, user_prompt: str, context: Dict[str, Any] = None) -> str: ...
 
 class IUIAgent(IAgent):
     """Protocolo para agentes que manejan la interfaz de usuario"""
-    
-    async def update_ui(self, context: AgentContext) -> None:
-        """Actualiza la interfaz de usuario con nueva información"""
-        ...
-
-    async def show_map(self, locations: List[Dict[str, Any]]) -> None:
-        """Muestra un mapa con las ubicaciones especificadas"""
-        ...
-
-    async def show_weather(self, weather_info: Dict[str, Any]) -> None:
-        """Muestra información del clima"""
-        ...
-
+    async def show_map(self, locations: List[Dict[str, Any]]) -> None: ...
+    async def show_weather(self, weather_info: Dict[str, Any]) -> None: ...
 
 class IUserAgent(IAgent):
     """Protocolo para agentes que manejan usuarios"""
-    
-    async def get_user_context(self, user_id: str) -> Any:
-        """Obtiene el contexto del usuario"""
-        ...
-
-    async def save_interaction(self, user_id: str, query: str, response: str) -> None:
-        """Guarda una interacción del usuario"""
-        ...
-
-    async def update_user_context(self, user_id: str, context_updates: Dict[str, Any]) -> None:
-        """Actualiza el contexto del usuario"""
-        ...
-
-    async def get_user_preferences(self, user_id: str) -> Dict[str, Any]:
-        """Obtiene las preferencias del usuario"""
-        ...
-
+    async def get_user_context(self, user_id: str) -> Any: ...
+    async def save_interaction(self, user_id: str, query: str, response: str) -> None: ...
 
 class IPlannerAgent(IAgent):
     """Protocolo para agentes de planificación"""
-    
-    async def generate_itinerary(
-        self, 
-        context: AgentContext
-    ) -> Optional[Dict[str, Any]]:
-        """Genera un itinerario optimizado"""
-        ...
-        
-    async def update_preferences(
-        self, 
-        user_preferences: Dict[str, Any]
-    ) -> None:
-        """Actualiza preferencias del usuario"""
-        ...
+    async def generate_itinerary(self, context: AgentContext) -> Optional[Dict[str, Any]]: ...
