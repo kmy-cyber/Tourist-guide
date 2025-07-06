@@ -199,7 +199,7 @@ with col2:
                 st.markdown('</div>', unsafe_allow_html=True)
 
         # Sección del planificador
-        if st.session_state.show_planner and "itinerary" in last_message and last_message["itinerary"]:
+        if st.session_state.show_planner and context and context.ui_elements.get("itinerary"):
             try:
                 with st.container():
                     st.markdown('<div class="side-panel pulse">', unsafe_allow_html=True)

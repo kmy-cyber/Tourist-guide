@@ -86,14 +86,23 @@ class TourismKB:
 
     def update_kb(self, items: List[Dict[str, Any]]):
         """
-        Actualiza de forma integral tanto el VectorStore como el KnowledgeGraph.
+        Actualiza de forma coordinada el VectorStore y el KnowledgeGraph.
         """
         if not items:
             logger.warning("No hay items para actualizar la base de conocimiento.")
             return
 
         logger.info(f"Actualizando KB con {len(items)} items...")
-        self.vector_store.add_items(items)
-        logger.info("VectorStore actualizado.")
-        self.knowledge_graph.build_from_data(items)
-        logger.info("KnowledgeGraph actualizado.")
+        
+        # 1. Procesar y añadir al VectorStore. Este método ahora estandariza
+        #    y devuelve los datos procesados, listos para el grafo.
+        processed_items = self.vector_store.add_items(items)
+        if not processed_items:
+            logger.error("VectorStore no procesó ningún item, la actualización del grafo se cancela.")
+            return
+        logger.info(f"VectorStore actualizado con {len(processed_items)} items.")
+
+        # 2. Construir/Actualizar el KnowledgeGraph con los MISMOS datos procesados.
+        #    Esto asegura que ambos componentes estén sincronizados.
+        self.knowledge_graph.build_from_data(processed_items)
+        logger.info("KnowledgeGraph actualizado con los datos procesados.")

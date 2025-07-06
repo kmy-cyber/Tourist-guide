@@ -103,12 +103,15 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
             
             if enhancement_result.get('enhanced'):
                 enhanced_data = enhancement_result.get('response', {})
-                context.knowledge.append({
+                formatted_result = {
                     "id": enhanced_data.get('name', 'dynamic_result').replace(' ', '_').lower(),
                     "source": "dynamic_crawler",
                     "data": enhanced_data
-                })
-                # NUEVO: Marca la información como "nueva" en los metadatos para que la recoja en el próximo ciclo.
+                }
+
+                context.knowledge.append(formatted_result)
+                
+                # Marca la información como "nueva" en los metadatos para que la recoja en el próximo ciclo.
                 context.metadata['new_knowledge'] = [formatted_result]
 
                 self.update_context_confidence(context, enhancement_result.get('confidence', 0.8))
@@ -174,7 +177,7 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
                 return
                 
             # 2. Procesar y validar los datos
-            processed_items = self._process_raw_data(fresh_data)
+            processed_items = fresh_data
             
             if not processed_items:
                 logger.warning("No valid items after processing")
