@@ -157,6 +157,7 @@ class VectorStore:
         file_path = os.path.join(collection_path, f"{doc['id']}.json")
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(doc, f, ensure_ascii=False, indent=2)
+            logger.info(f"Saved item {doc['id']} to {file_path}")
 
     def _load_items(self, collection_name: str) -> List[Dict]:
         """Load all documents from a given collection directory"""
@@ -267,6 +268,8 @@ class VectorStore:
         
         # Guardar cada item con su embedding
         for idx, item in enumerate(items):
+            logger.info(f"Processing item {idx + 1}/{len(items)}: {item.get('id', 'unknown')}")
+
             item_id = item['id']
 
             item_id = re.sub(r'[\\/:"*?<>|]', '', item_id) # Elimina caracteres no válidos
@@ -283,6 +286,7 @@ class VectorStore:
             # Guardar en disco
             with open(vector_file, 'wb') as f:
                 pickle.dump(vector_data, f)
+                logger.info(f"Saved item {item_id} to {vector_file}")
         
         # Actualizar set de colecciones
         self.collections.add(collection_name)

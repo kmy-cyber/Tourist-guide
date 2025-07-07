@@ -2,8 +2,14 @@
 Agente de conocimiento proactivo bajo el modelo BDI.
 Maneja la búsqueda y actualización de la base de conocimiento turístico.
 """
+from datetime import datetime
 import logging
+import os
+import shutil
 from typing import List, Dict, Any
+
+from app.data_managers.site_crawlers import HabCulturalMuseosCrawler, TripAdvisorCSVCrawler
+from app.data_managers.vector_store import VectorStore
 
 from .base_agent import BaseAgent
 from .interfaces import IKnowledgeAgent, AgentContext, AgentType
@@ -167,27 +173,20 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
         Este es el método principal para refrescar todos los datos.
         """
         logger.info("Starting simplified knowledge refresh...")
-        
         try:
             # 1. Obtener datos frescos de múltiples fuentes
             fresh_data = await self._get_fresh_data()
-            
             if not fresh_data:
                 logger.warning("No fresh data collected, using existing data")
                 return
-                
-            # 2. Procesar y validar los datos
-            processed_items = fresh_data
-            
+            # 2. Procesar y validar los datos (¡IMPORTANTE! Procesar antes de guardar)
+            processed_items = self._process_raw_data(fresh_data)
             if not processed_items:
                 logger.warning("No valid items after processing")
                 return
-            
             # 3. Actualizar vector store con los datos procesados
             await self._update_vector_store(processed_items)
-
             logger.info(f"Knowledge refresh completed successfully with {len(processed_items)} items")
-            
         except Exception as e:
             logger.error(f"Error refreshing knowledge: {str(e)}")
             raise
@@ -226,8 +225,6 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
         
         logger.info(f"Total fresh data collected: {len(all_data)} items")
         return all_data
-
-    
 
     def _get_static_tourism_data(self) -> List[Dict]:
         """
@@ -363,6 +360,7 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
                 
                 # Generar ID único si no existe
                 item_id = item.get('id', self._generate_id(item['name']))
+                logger.info(f"--- Processing item with ID: {item['name']} <=> {item_id}")
                 
                 # Evitar duplicados
                 # if item_id in seen_ids:
@@ -410,8 +408,6 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
             }
         return {"name": "", "address": "", "coordinates": None}
 
-    
-
     def _calculate_source_reliability(self, source: str) -> float:
         """Calcula confiabilidad basada en la fuente"""
         reliability_map = {
@@ -442,7 +438,7 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
         if not items:
             logger.warning("No items to update in vector store")
             return
-            
+        
         logger.info(f"Updating vector store with {len(items)} items...")
         
         try:
@@ -500,9 +496,12 @@ class KnowledgeAgent(BaseAgent, IKnowledgeAgent):
             # Actualizar referencia en TourismKB
             if self.tourism_kb:
                 self.tourism_kb.vector_store = VectorStore(vectors_dir)
+                logger.info(f"Vector store updated to {vectors_dir}")
             
             for collection_name, collection_items in collections.items():
+                self.tourism_kb.vector_store.add_texts(collection_name, collection_items)
                 self.tourism_kb.vector_store.store(collection_name, collection_items, regenerate_embeddings=True)
+                logger.info(f"Stored {len(collection_items)} items in collection '{collection_name}'")
             
             logger.info("Vector store updated successfully")
             

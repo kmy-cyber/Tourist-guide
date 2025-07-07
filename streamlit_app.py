@@ -206,7 +206,7 @@ with col2:
                     st.markdown('<div class="section-title">📅 ITINERARIO SUGERIDO</div>', unsafe_allow_html=True)
                     
                     # Mostrar el itinerario
-                    itinerary = last_message["itinerary"]
+                    itinerary = last_assistant_message["itinerary"]
                     for day in itinerary["days"]:
                         with st.expander(f"Día {day['day']}", expanded=True):
                             for activity in day['activities']:
@@ -251,3 +251,19 @@ with st.sidebar:
     if st.button("Limpiar Conversación"):
         st.session_state.messages = []
         st.rerun()
+
+    # Botón para refrescar la base de conocimiento
+    if st.button("🔄 Refrescar Base de Conocimiento"):
+        try:
+            knowledge = coordinator.get_agent(AgentType.KNOWLEDGE)
+
+            if coordinator:
+                with st.spinner("Actualizando la base de conocimiento..."):
+                    # Se asume que el CoordinatorAgent tiene un método refresh_knowledge_base()
+                    asyncio.run(knowledge.refresh_knowledge())
+                st.success("Base de conocimiento actualizada correctamente.")
+            else:
+                st.error("El sistema de agentes no está disponible.")
+        except Exception as e:
+            logger.error(f"Error al refrescar la base de conocimiento: {e}", exc_info=True)
+            st.error(f"Error al refrescar la base de conocimiento: {e}")
